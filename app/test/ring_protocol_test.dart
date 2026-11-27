@@ -1,0 +1,277 @@
+import 'package:flutter_test/flutter_test.dart';
+
+import 'package:bylwapp/ble/ring/ring_packet.dart';
+import 'package:bylwapp/ble/ring/ring_parser.dart';
+import 'package:bylwapp/ble/ring/ring_sync.dart';
+
+void main() {
+  final today = DateTime.utc(2026, 11, 27);
+  final now = DateTime.utc(2026, 11, 27, 12);
+
+  test('checksums a 16-byte command and rejects a bad trailer', () {
+    final battery = RingPacket.build(const [RingPacket.cmdBattery]);
+    expect(battery, hasLength(16));
+    expect(battery[0], 0x03);
+    expect(battery[15], 0x03);
+    expect(RingPacket.checksumValid(battery), isTrue);
+
+    final find = RingPacket.build(const [0x50, 0x55, 0xAA]);
+    expect(find[15], 0x4F);
+    find[15] = 0x00;
+    expect(RingPacket.checksumValid(find), isFalse);
+  });
+
+  test('encodes the ring clock as decimal nibbles', () {
+    final packet = RingPacket.encodeDateTime(
+      DateTime.utc(2026, 11, 27, 8, 15, 9),
+    );
+    expect(packet.sublist(0, 7), [0x01, 0x26, 0x11, 0x27, 0x08, 0x15, 0x09]);
+    expect(packet[15], 0x85);
+  });
+
+  test('temperature logging command is the R09/R05 preference write', () {
+    final packet = RingPacket.temperatureLogging(enabled: true);
+    expect(packet.sublist(0, 4), [0x3A, 0x03, 0x02, 0x01]);
+    expect(packet[15], 0x40);
+    expect(RingPacket.temperatureLogging(enabled: false)[3], 0x00);
+  });
+
+  test('crc16 modbus matches the standard check vector', () {
+    expect(RingPacket.crc16Modbus('123456789'.codeUnits), 0x4B37);
+    expect(RingPacket.crc16Modbus(const []), 0xFFFF);
+  });
+
+  test('reassembles a split big-data frame', () {
+    final payload = List<int>.filled(14, 0x11);
+    final frame = RingPacket.buildBigData(
+      type: RingPacket.bigDataSpo2,
+      payload: payload,
+    );
+    final assembler = BigDataAssembler();
+    expect(assembler.add(frame.sublist(0, 10)), isNull);
+    expect(assembler.add(frame.sublist(10)), frame);
+  });
+
+  test('decodes an activity sample', () {
+    final packet = RingPacket.build(const [
+      0x43,
+      0x26,
+      0x11,
+      0x27,
+      36,
+      0x00,
+      0x01,
+      0x64,
+      0x00,
+      0xE8,
+      0x03,
+      0x2C,
+      0x01,
+    ]);
+    expect(packet[15], 0x42);
+    final parsed = parseRingPacket(packet, today: today, now: now);
+    final sample = parsed.measurements.single;
+    expect(sample.type, 'steps');
+    expect(sample.recordedAt, DateTime.utc(2026, 11, 27, 9));
+    expect(sample.values['steps'], 1000);
+    expect(sample.values['calories'], 100);
+    expect(sample.values['distance_m'], 300);
+    expect(parsed.dayComplete, isTrue);
+  });
+
+  test('decodes heart-rate history and skips future slots', () {
+    final packet = RingPacket.build([
+      RingPacket.cmdSyncHeartRate,
+      0x01,
+      0,
+      0,
+      0,
+      0,
+      70,
+      0,
+      71,
+    ]);
+    final morning = DateTime.utc(2026, 11, 27, 0, 5);
+    final parsed = parseRingPacket(packet, today: today, now: morning);
+    expect(parsed.measurements.map((item) => item.values['bpm']).toList(), [
+      70,
+    ]);
+    expect(
+      parsed.measurements.single.recordedAt,
+      DateTime.utc(2026, 11, 27, 0, 0),
+    );
+  });
+
+  test('decodes live steps, realtime heart rate, and battery', () {
+    final live = parseLiveActivity(const [
+      0x73,
+      0x12,
+      0x00,
+      0x03,
+      0xE8,
+      0x00,
+      0x00,
+      0x96,
+      0x00,
+      0x00,
+      0xFA,
+    ]);
+    expect(live!.steps, 1000);
+    expect(live.calories, 15);
+    expect(live.distanceMeters, 250);
+
+    final hr = RingPacket.build(const [RingPacket.cmdRealtimeHeartRate, 80]);
+    expect(
+      parseRingPacket(
+        hr,
+        today: today,
+        now: now,
+      ).measurements.single.values['bpm'],
+      80,
+    );
+
+    final manual = RingPacket.build(const [
+      RingPacket.cmdManualHeartRate,
+      0x00,
+      0x00,
+      72,
+    ]);
+    expect(
+      parseRingPacket(
+        manual,
+        today: today,
+        now: now,
+      ).measurements.single.values['source'],
+      'manual',
+    );
+
+    final worn = RingPacket.build(const [
+      RingPacket.cmdManualHeartRate,
+      0x00,
+      0x01,
+      0,
+    ]);
+    expect(parseRingPacket(worn, today: today, now: now).measurements, isEmpty);
+
+    final battery = parseBattery(
+      RingPacket.build(const [RingPacket.cmdBattery, 85, 1]),
+    );
+    expect(battery!.percent, 85);
+    expect(battery.charging, isTrue);
+  });
+
+  test('decodes spo2, sleep, stress, hrv, and temperature history', () {
+    final spo2Payload = <int>[0, 97, 99, ...List<int>.filled(46, 0)];
+    final spo2 = RingPacket.buildBigData(
+      type: RingPacket.bigDataSpo2,
+      payload: spo2Payload,
+    );
+    final spo2Sample = parseRingPacket(
+      spo2,
+      today: today,
+      now: now,
+    ).measurements.single;
+    expect(spo2Sample.values['spo2'], 98);
+    expect(spo2Sample.values['min'], 97);
+    expect(spo2Sample.values['max'], 99);
+
+    final sleepPayload = <int>[
+      1,
+      0,
+      8,
+      0x64, 0x05, // 1380 minutes, 23:00 previous day
+      0xA4, 0x01, // 420 minutes, 07:00
+      RingPacket.sleepDeep, 60,
+      RingPacket.sleepLight, 120,
+    ];
+    final sleep = RingPacket.buildBigData(
+      type: RingPacket.bigDataSleep,
+      payload: sleepPayload,
+    );
+    final sleepParsed = parseRingPacket(
+      sleep,
+      today: today,
+      now: now,
+    ).measurements;
+    expect(sleepParsed.first.type, 'sleep_session');
+    expect(sleepParsed.first.recordedAt, DateTime.utc(2026, 11, 26, 23));
+    expect(sleepParsed[1].values['stage'], 'deep');
+    expect(sleepParsed[2].values['stage'], 'light');
+    expect(sleepParsed[2].recordedAt, DateTime.utc(2026, 11, 27, 0));
+
+    final stress = RingPacket.build([
+      RingPacket.cmdSyncStress,
+      0x01,
+      0x00,
+      40,
+      0,
+      41,
+    ]);
+    final stressSamples = parseRingPacket(
+      stress,
+      today: today,
+      now: now,
+    ).measurements;
+    expect(stressSamples.map((item) => item.values['stress']).toList(), [
+      40,
+      41,
+    ]);
+    expect(stressSamples[1].recordedAt, DateTime.utc(2026, 11, 27, 1));
+
+    final hrv = RingPacket.build([RingPacket.cmdSyncHrv, 0x01, 0x00, 45]);
+    final hrvSample = parseRingPacket(
+      hrv,
+      today: today,
+      now: now,
+      daysAgo: 1,
+    ).measurements.single;
+    expect(hrvSample.values['hrv_ms'], 45);
+    expect(hrvSample.recordedAt, DateTime.utc(2026, 11, 26));
+
+    final tempPayload = <int>[0, 0x1E, 165, 0, ...List<int>.filled(46, 0)];
+    expect(tempPayload, hasLength(50));
+    final temp = RingPacket.buildBigData(
+      type: RingPacket.bigDataTemperature,
+      payload: tempPayload,
+    );
+    final tempSample = parseRingPacket(
+      temp,
+      today: today,
+      now: now,
+    ).measurements.single;
+    expect(tempSample.values['celsius'], 36.5);
+    expect(tempSample.unit, '°C');
+
+    final badCrc = [...temp];
+    badCrc[4] = 0;
+    expect(parseRingPacket(badCrc, today: today, now: now).ignored, isTrue);
+  });
+
+  test('history sync walks activity days and enables temperature before fetching it', () {
+    final cursor = RingSyncCursor(now: now, temperatureCapable: true);
+    final first = cursor.nextCommand()!;
+    expect(first.bytes.sublist(0, 6), [0x43, 0x00, 0x0F, 0x00, 0x5F, 0x01]);
+    expect(first.characteristicUuid, isNot(contains('de5bf72a')));
+
+    cursor.consume(RingPacket.build(const [RingPacket.cmdSyncActivity, 0xFF]));
+    expect(cursor.daysAgo, 1);
+    expect(cursor.awaitingMore, isFalse);
+
+    cursor.phase = RingSyncPhase.temperature;
+    cursor.temperatureLoggingEnabled = false;
+    final enable = cursor.nextCommand()!;
+    expect(enable.label, 'enable-temperature');
+    expect(enable.bytes.sublist(0, 4), [0x3A, 0x03, 0x02, 0x01]);
+    cursor.consume(enable.bytes);
+    final history = cursor.nextCommand()!;
+    expect(history.bytes.sublist(0, 2), [0xBC, 0x25]);
+    expect(history.bytes.sublist(2), [0x01, 0x00, 0x3E, 0x81, 0x02]);
+  });
+
+  test('R09 and R05 are the temperature models', () {
+    expect(ringNameSupportsTemperature('R09_1234'), isTrue);
+    expect(ringNameSupportsTemperature('R05_AB12'), isTrue);
+    expect(ringNameSupportsTemperature('R02_1234'), isFalse);
+    expect(ringNameSupportsTemperature('R05_zzzz'), isFalse);
+  });
+}

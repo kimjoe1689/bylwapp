@@ -1,0 +1,313 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>bylwapp 管理后台</title>
+  <style>
+    :root {
+      --ink: #1c1915;
+      --muted: #5e584e;
+      --line: #e4dfd4;
+      --paper: #f6f3ec;
+      --card: #fffdf8;
+      --accent: #0f6e56;
+      --accent-ink: #ffffff;
+      --danger: #8d2f2f;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font: 15px/1.5 "Source Han Sans SC", "Noto Sans SC", "PingFang SC", "Microsoft YaHei", sans-serif;
+      color: var(--ink);
+      background: var(--paper);
+    }
+    header, main { width: min(1080px, calc(100% - 32px)); margin: 0 auto; }
+    header { padding: 28px 0 8px; display: flex; justify-content: space-between; gap: 16px; align-items: end; }
+    h1 { font-size: 28px; margin: 0; letter-spacing: -0.03em; }
+    h2 { font-size: 18px; margin: 0 0 12px; }
+    p.note { color: var(--muted); margin: 6px 0 0; }
+    .pill { border: 1px solid var(--line); background: var(--card); border-radius: 999px; padding: 6px 12px; }
+    .pill.ok { color: var(--accent); }
+    .pill.bad { color: var(--danger); }
+    section { background: var(--card); border: 1px solid var(--line); border-radius: 16px; padding: 18px; margin: 16px 0; }
+    .row { display: flex; flex-wrap: wrap; gap: 10px; align-items: end; }
+    label { display: flex; flex-direction: column; gap: 4px; font-size: 13px; color: var(--muted); }
+    input, select, textarea, button {
+      font: inherit;
+      color: var(--ink);
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      padding: 8px 10px;
+      background: white;
+    }
+    textarea { min-width: 280px; min-height: 72px; }
+    button { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); cursor: pointer; }
+    button.ghost { background: white; color: var(--ink); }
+    button.danger { background: white; color: var(--danger); border-color: #e7c7c7; }
+    table { width: 100%; border-collapse: collapse; }
+    th, td { text-align: left; padding: 8px 6px; border-bottom: 1px solid var(--line); vertical-align: top; }
+    th { color: var(--muted); font-weight: 600; font-size: 13px; }
+    .empty { color: var(--muted); padding: 12px 0; }
+    .banner { display: none; margin-top: 12px; padding: 10px 12px; border-radius: 10px; background: #f8e8e4; color: var(--danger); }
+    code { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 12px; }
+  </style>
+</head>
+<body>
+  <header>
+    <div>
+      <h1>bylwapp 管理后台</h1>
+      <p class="note">接收客户端上传的血压、心率和戒指测量。当前没有登录认证，请只在可信网络使用。</p>
+    </div>
+    <div id="health" class="pill">检查中</div>
+  </header>
+  <main>
+    <div id="banner" class="banner"></div>
+    <section>
+      <h2>录入一条测量</h2>
+      <form id="entry" class="row">
+        <label>设备名称<input name="name" required value="YE680B"></label>
+        <label>类型
+          <select name="kind">
+            <option value="blood_pressure">血压计</option>
+            <option value="heart_rate">心率带</option>
+            <option value="ring">戒指</option>
+          </select>
+        </label>
+        <label>地址<input name="address" required value="AA:BB:CC:DD:EE:01"></label>
+        <label>型号<input name="model" value="Yuwell YE680B"></label>
+        <label>测量
+          <select name="type" id="type">
+            <option value="blood_pressure">血压</option>
+            <option value="heart_rate">心率</option>
+            <option value="steps">步数</option>
+            <option value="spo2">血氧</option>
+            <option value="sleep">睡眠</option>
+            <option value="stress">压力</option>
+            <option value="hrv">HRV</option>
+            <option value="temperature">体温</option>
+          </select>
+        </label>
+        <label>单位<input name="unit" id="unit" required value="mmHg"></label>
+        <label>时间<input name="recorded_at" id="recorded_at" type="datetime-local" required></label>
+        <label>数值 JSON<textarea name="values" id="values">{"systolic":120,"diastolic":80,"pulse":72}</textarea></label>
+        <button type="submit">保存</button>
+      </form>
+    </section>
+    <section>
+      <div class="row" style="justify-content: space-between;">
+        <h2>设备</h2>
+        <button class="ghost" id="refresh" type="button">刷新</button>
+      </div>
+      <div id="devices"></div>
+    </section>
+    <section>
+      <div class="row">
+        <h2 style="margin-right: auto;">测量记录</h2>
+        <label>筛选
+          <select id="filter">
+            <option value="">全部</option>
+            <option value="blood_pressure">血压</option>
+            <option value="heart_rate">心率</option>
+            <option value="steps">步数</option>
+            <option value="spo2">血氧</option>
+            <option value="sleep">睡眠</option>
+            <option value="sleep_session">睡眠时段</option>
+            <option value="stress">压力</option>
+            <option value="hrv">HRV</option>
+            <option value="temperature">体温</option>
+          </select>
+        </label>
+      </div>
+      <div id="measurements"></div>
+    </section>
+  </main>
+  <script>
+    const typeUnits = {
+      blood_pressure: "mmHg",
+      heart_rate: "bpm",
+      steps: "steps",
+      spo2: "%",
+      sleep: "min",
+      stress: "level",
+      hrv: "ms",
+      temperature: "°C"
+    };
+    const typeValues = {
+      blood_pressure: '{"systolic":120,"diastolic":80,"pulse":72}',
+      heart_rate: '{"bpm":72}',
+      steps: '{"steps":1200,"calories":50,"distance_m":800}',
+      spo2: '{"spo2":98}',
+      sleep: '{"stage":"deep","duration_min":40}',
+      stress: '{"stress":35}',
+      hrv: '{"hrv_ms":42}',
+      temperature: '{"celsius":36.5}'
+    };
+    const banner = document.querySelector("#banner");
+    function showError(err) {
+      banner.style.display = "block";
+      banner.textContent = err.message || String(err);
+    }
+    function clearError() { banner.style.display = "none"; }
+    async function api(path, options) {
+      const response = await fetch(path, options);
+      const text = await response.text();
+      const data = text ? JSON.parse(text) : null;
+      if (!response.ok) throw new Error((data && data.error) || response.statusText);
+      return data;
+    }
+    function cell(text) {
+      const td = document.createElement("td");
+      td.textContent = text == null ? "" : String(text);
+      return td;
+    }
+    async function refreshHealth() {
+      const el = document.querySelector("#health");
+      try {
+        const data = await api("/health");
+        el.textContent = "服务正常 " + data.time;
+        el.className = "pill ok";
+      } catch (err) {
+        el.textContent = "服务异常";
+        el.className = "pill bad";
+      }
+    }
+    async function refreshDevices() {
+      const host = document.querySelector("#devices");
+      const devices = await api("/api/devices");
+      host.replaceChildren();
+      if (!devices.length) {
+        const p = document.createElement("p");
+        p.className = "empty";
+        p.textContent = "还没有设备。";
+        host.append(p);
+        return;
+      }
+      const table = document.createElement("table");
+      const head = document.createElement("tr");
+      ["名称", "种类", "地址", "型号", ""].forEach((label) => {
+        const th = document.createElement("th");
+        th.textContent = label;
+        head.append(th);
+      });
+      table.append(head);
+      devices.forEach((device) => {
+        const tr = document.createElement("tr");
+        tr.append(cell(device.name), cell(device.kind), cell(device.address), cell(device.model));
+        const action = document.createElement("td");
+        const button = document.createElement("button");
+        button.className = "danger";
+        button.type = "button";
+        button.textContent = "删除";
+        button.addEventListener("click", async () => {
+          if (!confirm("删除这台设备及其测量记录？")) return;
+          await api("/api/devices/" + device.id, { method: "DELETE" });
+          await refreshAll();
+        });
+        action.append(button);
+        tr.append(action);
+        table.append(tr);
+      });
+      host.append(table);
+    }
+    async function refreshMeasurements() {
+      const host = document.querySelector("#measurements");
+      const type = document.querySelector("#filter").value;
+      const path = type ? "/api/measurements?type=" + encodeURIComponent(type) : "/api/measurements";
+      const items = await api(path);
+      host.replaceChildren();
+      if (!items.length) {
+        const p = document.createElement("p");
+        p.className = "empty";
+        p.textContent = "还没有测量记录。";
+        host.append(p);
+        return;
+      }
+      const table = document.createElement("table");
+      const head = document.createElement("tr");
+      ["时间", "设备", "类型", "单位", "数值", ""].forEach((label) => {
+        const th = document.createElement("th");
+        th.textContent = label;
+        head.append(th);
+      });
+      table.append(head);
+      items.forEach((item) => {
+        const tr = document.createElement("tr");
+        tr.append(
+          cell(item.recorded_at),
+          cell(item.device_name + " (" + item.device_address + ")"),
+          cell(item.type),
+          cell(item.unit),
+          cell(JSON.stringify(item.values))
+        );
+        const action = document.createElement("td");
+        const button = document.createElement("button");
+        button.className = "danger";
+        button.type = "button";
+        button.textContent = "删除";
+        button.addEventListener("click", async () => {
+          await api("/api/measurements/" + item.id, { method: "DELETE" });
+          await refreshMeasurements();
+        });
+        action.append(button);
+        tr.append(action);
+        table.append(tr);
+      });
+      host.append(table);
+    }
+    async function refreshAll() {
+      clearError();
+      try {
+        await refreshHealth();
+        await refreshDevices();
+        await refreshMeasurements();
+      } catch (err) {
+        showError(err);
+      }
+    }
+    document.querySelector("#type").addEventListener("change", (event) => {
+      const type = event.target.value;
+      document.querySelector("#unit").value = typeUnits[type] || "";
+      document.querySelector("#values").value = typeValues[type] || "{}";
+    });
+    document.querySelector("#filter").addEventListener("change", () => refreshMeasurements().catch(showError));
+    document.querySelector("#refresh").addEventListener("click", refreshAll);
+    document.querySelector("#entry").addEventListener("submit", async (event) => {
+      event.preventDefault();
+      const form = new FormData(event.target);
+      let values;
+      try { values = JSON.parse(form.get("values")); }
+      catch (err) { showError(new Error("数值不是合法 JSON")); return; }
+      const recorded = new Date(form.get("recorded_at"));
+      if (Number.isNaN(recorded.getTime())) { showError(new Error("时间无效")); return; }
+      try {
+        await api("/api/sync", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            device: {
+              name: form.get("name"),
+              kind: form.get("kind"),
+              address: form.get("address"),
+              model: form.get("model")
+            },
+            measurements: [{
+              type: form.get("type"),
+              unit: form.get("unit"),
+              recorded_at: recorded.toISOString(),
+              values
+            }]
+          })
+        });
+        await refreshAll();
+      } catch (err) {
+        showError(err);
+      }
+    });
+    const now = new Date();
+    now.setMinutes(now.getMinutes() - now.getTimezoneOffset());
+    document.querySelector("#recorded_at").value = now.toISOString().slice(0, 16);
+    refreshAll();
+  </script>
+</body>
+</html>
