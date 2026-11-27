@@ -107,7 +107,9 @@ describe("Go API contract", () => {
 
     const page = await call("GET", "/");
     expect(page.status).toBe(200);
-    expect(page.text).toContain("管理后台");
+    expect(page.text).toContain("数据采集管理系统");
+    expect(page.text).toContain("概览");
+    expect(page.text).toContain("数据记录");
     expect(page.headers.get("content-type")).toContain("text/html");
   });
 

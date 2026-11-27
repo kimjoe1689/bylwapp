@@ -73,7 +73,7 @@ func TestIngestIdempotencyReadBackAndRoles(t *testing.T) {
 		t.Fatalf("reconciliation %s", recon.Body.String())
 	}
 	page := do(t, srv, http.MethodGet, "/", nil, "")
-	if page.Code != http.StatusOK || !bytes.Contains(page.Body.Bytes(), []byte("管理后台")) {
+	if page.Code != http.StatusOK || !bytes.Contains(page.Body.Bytes(), []byte("数据采集管理系统")) {
 		t.Fatalf("page %d", page.Code)
 	}
 	_ = st

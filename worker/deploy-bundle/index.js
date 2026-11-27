@@ -1920,273 +1920,837 @@ var ADMIN_HTML = `<!DOCTYPE html>
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>bylwapp \u7BA1\u7406\u540E\u53F0</title>
+  <title>bylwapp \u6570\u636E\u91C7\u96C6\u7BA1\u7406\u7CFB\u7EDF</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%230E7C73'/%3E%3C/svg%3E">
   <style>
-    :root { --ink:#1c1915; --muted:#5e584e; --line:#e4dfd4; --paper:#f6f3ec; --card:#fffdf8; --accent:#0f6e56; }
+    :root {
+      --brand: #0e7c73;
+      --brand-dark: #0b5f59;
+      --brand-soft: #e7f5f3;
+      --ink: #12211e;
+      --muted: #5d6d69;
+      --line: #e4eeeb;
+      --bg: #f3f7f6;
+      --card: #ffffff;
+      --sidebar: #0c1c1a;
+      --side-text: #d7e6e2;
+      --ok: #067647;
+      --ok-bg: #e7f6ee;
+      --wait: #b54708;
+      --wait-bg: #fef4e6;
+      --bad: #b42318;
+      --bad-bg: #fdeceb;
+      --shadow: 0 1px 2px rgba(16, 33, 30, 0.05), 0 10px 28px rgba(16, 33, 30, 0.05);
+      --radius: 16px;
+      --font: "PingFang SC", "Hiragino Sans GB", "Noto Sans SC", "Microsoft YaHei", "Segoe UI", sans-serif;
+      --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    }
     * { box-sizing: border-box; }
-    body { margin:0; font:15px/1.5 "Source Han Sans SC","Noto Sans SC","PingFang SC","Microsoft YaHei",sans-serif; color:var(--ink); background:var(--paper); }
-    header, main { width:min(1100px, calc(100% - 28px)); margin:0 auto; }
-    header { padding:24px 0 8px; display:flex; justify-content:space-between; gap:12px; align-items:end; }
-    h1 { margin:0; font-size:28px; }
-    h2 { margin:0 0 10px; font-size:18px; }
-    .note { color:var(--muted); margin:6px 0 0; }
-    section { background:var(--card); border:1px solid var(--line); border-radius:16px; padding:16px; margin:14px 0; }
-    label { display:flex; flex-direction:column; gap:4px; font-size:13px; color:var(--muted); }
-    input, select, button { font:inherit; border:1px solid var(--line); border-radius:10px; padding:8px 10px; background:white; color:var(--ink); }
-    button { background:var(--accent); color:white; border-color:var(--accent); cursor:pointer; }
-    button.ghost { background:white; color:var(--ink); }
-    .row { display:flex; flex-wrap:wrap; gap:10px; align-items:end; }
-    table { width:100%; border-collapse:collapse; }
-    th, td { text-align:left; padding:7px 6px; border-bottom:1px solid var(--line); vertical-align:top; font-size:13px; }
-    .cards { display:grid; grid-template-columns:repeat(auto-fit,minmax(220px,1fr)); gap:10px; }
-    .card { border:1px solid var(--line); border-radius:12px; padding:12px; }
-    .stale { color:#8d2f2f; }
-    .banner { display:none; margin-top:10px; padding:10px; border-radius:10px; background:#f8e8e4; color:#8d2f2f; }
-    svg { width:100%; height:180px; background:#fbfaf6; border-radius:12px; }
-    code { font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:12px; }
-    .code { font:700 40px/1 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; letter-spacing:0.3em; margin:8px 0 0; }
+    [hidden] { display: none !important; }
+    html, body { margin: 0; min-height: 100%; }
+    body { font: 14px/1.5 var(--font); color: var(--ink); background: var(--bg); }
+    button, input, select { font: inherit; color: inherit; }
+    button { cursor: pointer; }
+    h1, h2, p { margin: 0; }
+    .mark { width: 36px; height: 36px; display: block; }
+    .login-screen { min-height: 100vh; display: grid; place-items: center; padding: 24px; background: radial-gradient(900px 480px at 50% -10%, #d7f3ef 0%, var(--bg) 55%); }
+    .login-card { width: min(420px, 100%); background: var(--card); border: 1px solid var(--line); border-radius: 24px; box-shadow: var(--shadow); padding: 32px 28px 28px; }
+    .login-brand { display: flex; gap: 12px; align-items: center; margin-bottom: 22px; }
+    .login-brand strong { display: block; font-size: 18px; letter-spacing: -0.02em; }
+    .login-brand span { color: var(--muted); font-size: 13px; }
+    .field { display: flex; flex-direction: column; gap: 6px; margin-bottom: 14px; font-size: 13px; color: var(--muted); }
+    .field input, .field select, .toolbar select, .toolbar input { border: 1px solid var(--line); background: #fff; border-radius: 12px; padding: 10px 12px; outline: none; }
+    .field input:focus, .field select:focus, .toolbar select:focus { border-color: var(--brand); box-shadow: 0 0 0 3px rgba(14, 124, 115, 0.15); }
+    .primary, .ghost, .seg button { border-radius: 12px; border: 1px solid transparent; padding: 10px 14px; }
+    .primary { background: var(--brand); color: white; width: 100%; font-weight: 600; }
+    .primary:hover { background: var(--brand-dark); }
+    .ghost { background: white; border-color: var(--line); color: var(--ink); }
+    .login-error { display: none; margin-top: 12px; padding: 10px 12px; border-radius: 12px; background: var(--bad-bg); color: var(--bad); }
+    .login-foot { margin-top: 16px; color: var(--muted); font-size: 12px; }
+    .shell { min-height: 100vh; display: flex; }
+    .sidebar { width: 240px; flex: none; background: var(--sidebar); color: var(--side-text); display: flex; flex-direction: column; padding: 18px 12px; position: sticky; top: 0; height: 100vh; }
+    .side-brand { display: flex; gap: 10px; align-items: center; padding: 4px 8px 18px; color: white; }
+    .side-brand strong { display: block; font-size: 15px; }
+    .side-brand span { display: block; font-size: 12px; color: #9fb8b3; }
+    .nav { display: flex; flex-direction: column; gap: 4px; }
+    .nav button { display: flex; align-items: center; gap: 10px; width: 100%; text-align: left; background: transparent; color: var(--side-text); border: 0; border-radius: 10px; padding: 9px 10px; }
+    .nav button svg { width: 18px; height: 18px; flex: none; }
+    .nav button.active { background: rgba(255,255,255,0.1); color: white; font-weight: 650; }
+    .nav .split { height: 1px; background: rgba(255,255,255,0.08); margin: 8px 8px; }
+    .side-note { margin-top: auto; padding: 12px 10px 4px; font-size: 12px; color: #8eaaa4; }
+    .workspace { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+    .topbar { height: 64px; display: flex; align-items: center; gap: 12px; padding: 0 22px; background: rgba(255,255,255,0.92); border-bottom: 1px solid var(--line); position: sticky; top: 0; z-index: 5; backdrop-filter: blur(10px); }
+    .topbar h1 { font-size: 18px; letter-spacing: -0.02em; flex: 1; }
+    .top-actions { display: flex; align-items: center; gap: 10px; }
+    .updated { color: var(--muted); font-size: 12px; white-space: nowrap; }
+    .icon-btn { display: none; width: 38px; height: 38px; border-radius: 10px; border: 1px solid var(--line); background: white; align-items: center; justify-content: center; }
+    .user-wrap { position: relative; }
+    .user-btn { display: flex; flex-direction: column; align-items: flex-end; background: white; border: 1px solid var(--line); border-radius: 12px; padding: 6px 10px; min-width: 96px; }
+    .user-btn strong { font-size: 13px; }
+    .user-btn span { font-size: 11px; color: var(--muted); }
+    .user-menu { position: absolute; right: 0; top: calc(100% + 6px); background: white; border: 1px solid var(--line); border-radius: 12px; box-shadow: var(--shadow); padding: 6px; min-width: 140px; }
+    .user-menu button { width: 100%; background: transparent; border: 0; text-align: left; border-radius: 8px; padding: 8px 10px; }
+    .user-menu button:hover { background: var(--bg); }
+    .content { padding: 22px; display: flex; flex-direction: column; gap: 16px; }
+    .banner { display: none; margin: 16px 22px 0; padding: 10px 12px; border-radius: 12px; background: var(--bad-bg); color: var(--bad); }
+    .kpi { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 12px; }
+    .card, .panel { background: var(--card); border: 1px solid var(--line); border-radius: var(--radius); box-shadow: var(--shadow); }
+    .kpi .card { padding: 14px 14px 12px; }
+    .kpi .label { color: var(--muted); font-size: 12px; }
+    .kpi .value { margin-top: 6px; font-size: 26px; font-weight: 680; letter-spacing: -0.03em; font-variant-numeric: tabular-nums; }
+    .kpi .hint { margin-top: 4px; color: var(--muted); font-size: 12px; }
+    .panel { padding: 16px; }
+    .panel-head { display: flex; justify-content: space-between; gap: 12px; align-items: center; margin-bottom: 12px; flex-wrap: wrap; }
+    .panel-head h2 { font-size: 16px; }
+    .sub { color: var(--muted); font-size: 12px; margin-top: 2px; }
+    .seg { display: flex; background: var(--bg); border-radius: 12px; padding: 3px; gap: 2px; }
+    .seg button { background: transparent; border: 0; color: var(--muted); padding: 6px 10px; border-radius: 9px; }
+    .seg button.on { background: white; color: var(--ink); box-shadow: 0 1px 2px rgba(16,33,30,.08); }
+    .chart-wrap { height: 240px; }
+    svg.chart { width: 100%; height: 240px; display: block; }
+    .device-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 12px; }
+    .device-card { padding: 14px; }
+    .device-card header { display: flex; justify-content: space-between; gap: 8px; align-items: flex-start; }
+    .device-card h3 { font-size: 15px; font-weight: 650; }
+    .badge { display: inline-flex; align-items: center; gap: 6px; border-radius: 999px; padding: 2px 8px; font-size: 12px; font-weight: 650; white-space: nowrap; }
+    .badge.ok { background: var(--ok-bg); color: var(--ok); }
+    .badge.wait { background: var(--wait-bg); color: var(--wait); }
+    .badge.bad { background: var(--bad-bg); color: var(--bad); }
+    .badge.neutral { background: #eef2f1; color: #52615d; }
+    .meta { margin-top: 8px; color: var(--muted); font-size: 13px; }
+    table { width: 100%; border-collapse: collapse; }
+    th, td { text-align: left; padding: 10px 8px; border-bottom: 1px solid var(--line); vertical-align: middle; font-size: 13px; }
+    th { color: var(--muted); font-weight: 600; font-size: 12px; }
+    #records tbody tr { cursor: pointer; }
+    #records tbody tr:hover { background: #f7fbfa; }
+    .toolbar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+    .pager { display: flex; justify-content: space-between; align-items: center; gap: 8px; margin-top: 12px; color: var(--muted); font-size: 13px; }
+    .rq-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+    .rq-stats { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; margin: 12px 0; }
+    .stat { background: var(--bg); border-radius: 12px; padding: 10px; }
+    .stat b { display: block; font-size: 18px; font-variant-numeric: tabular-nums; }
+    .stat span { color: var(--muted); font-size: 12px; }
+    .export-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 12px; }
+    .export-grid button { text-align: left; background: white; }
+    .export-grid button small { display: block; color: var(--muted); font-weight: 400; }
+    .forms { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+    .pair-code { font: 700 36px/1 var(--mono); letter-spacing: 0.28em; margin: 8px 0 0; color: var(--brand-dark); }
+    .empty { border: 1px dashed #c9d8d4; border-radius: 14px; padding: 28px 16px; text-align: center; color: var(--muted); }
+    .empty strong { display: block; color: var(--ink); margin-bottom: 4px; }
+    .sk { position: relative; overflow: hidden; color: transparent !important; background: #e7eeec; border-radius: 8px; }
+    .sk::after { content: ""; position: absolute; inset: 0; background: linear-gradient(90deg, transparent, rgba(255,255,255,.7), transparent); animation: shine 1.2s infinite; }
+    @keyframes shine { from { transform: translateX(-100%); } to { transform: translateX(100%); } }
+    .backdrop { display: none; }
+    .drawer { position: fixed; inset: 0; background: rgba(12, 28, 26, 0.38); z-index: 40; display: flex; justify-content: flex-end; }
+    .drawer[hidden] { display: none; }
+    .drawer-panel { width: min(480px, 100%); height: 100%; background: white; padding: 18px; overflow: auto; box-shadow: var(--shadow); }
+    .drawer-panel header { display: flex; justify-content: space-between; gap: 12px; align-items: flex-start; margin-bottom: 12px; }
+    pre { margin: 0; white-space: pre-wrap; word-break: break-word; font: 12px/1.55 var(--mono); background: #0c1c1a; color: #e7f5f3; border-radius: 12px; padding: 12px; }
+    .hash { font-family: var(--mono); font-size: 12px; color: var(--muted); }
+    @media (max-width: 1100px) {
+      .kpi { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+      .rq-grid, .forms { grid-template-columns: 1fr; }
+    }
+    @media (max-width: 860px) {
+      .icon-btn { display: inline-flex; }
+      .sidebar { position: fixed; z-index: 30; transform: translateX(-105%); transition: transform .18s ease; }
+      .sidebar.open { transform: none; }
+      .backdrop.show { display: block; position: fixed; inset: 0; background: rgba(12,28,26,.35); z-index: 25; }
+      .kpi { grid-template-columns: 1fr 1fr; }
+      .content, .topbar { padding-left: 14px; padding-right: 14px; }
+      .updated { display: none; }
+      .user-btn { min-width: 0; }
+    }
   </style>
 </head>
 <body>
-  <header>
-    <div>
-      <h1>bylwapp \u7BA1\u7406\u540E\u53F0</h1>
-      <p class="note">\u91C7\u96C6\u7AEF\u662F\u624B\u673A\u5E94\u7528\u3002\u8FD9\u91CC\u53EA\u663E\u793A\u670D\u52A1\u5668\u5DF2\u7ECF\u6536\u5230\u7684\u526F\u672C\uFF0C\u6700\u8FD1 100 \u6761\u4E0D\u662F\u4E22\u5931\u6E05\u5355\uFF0C\u4E5F\u4E0D\u80FD\u5F53\u4F5C\u8BBA\u6587\u7ED3\u679C\u3002</p>
-    </div>
-    <button class="ghost" id="logout" type="button" hidden>\u9000\u51FA</button>
-  </header>
-  <main>
-    <div id="banner" class="banner"></div>
-    <section id="login">
-      <h2>\u62A4\u7406\u8005 / \u7BA1\u7406\u5458\u767B\u5F55</h2>
-      <form id="login-form" class="row">
-        <label>\u7528\u6237\u540D<input name="username" required autocomplete="username"></label>
-        <label>\u5BC6\u7801<input name="password" type="password" required autocomplete="current-password"></label>
-        <button type="submit">\u767B\u5F55</button>
-      </form>
-    </section>
-    <div id="app" hidden>
-      <section>
-        <div class="row" style="justify-content:space-between">
-          <h2>\u91C7\u96C6\u7AEF\u72B6\u6001</h2>
-          <button class="ghost" id="refresh" type="button">\u5237\u65B0</button>
+  <div id="login-screen" class="login-screen">
+    <form id="login-form" class="login-card">
+      <div class="login-brand">
+        <svg class="mark" viewBox="0 0 32 32" aria-hidden="true"><rect width="32" height="32" rx="8" fill="#0E7C73"/><path d="M6 17h4l2.2-6 3.2 11 2.3-5H26" fill="none" stroke="#fff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        <div>
+          <strong>bylwapp \u6570\u636E\u91C7\u96C6\u7BA1\u7406\u7CFB\u7EDF</strong>
+          <span>\u62A4\u7406\u8005 / \u7BA1\u7406\u5458\u767B\u5F55</span>
         </div>
-        <div id="devices" class="cards"></div>
-      </section>
-      <section>
-        <div class="row">
-          <h2 style="margin-right:auto">\u8D8B\u52BF</h2>
-          <label>\u7C7B\u578B
-            <select id="series-type">
-              <option value="blood_pressure">\u8840\u538B\u6536\u7F29\u538B</option>
-              <option value="heart_rate">\u5FC3\u7387</option>
-              <option value="spo2">\u8840\u6C27</option>
-              <option value="temperature">\u6E29\u5EA6</option>
-              <option value="steps">\u6B65\u6570</option>
-            </select>
-          </label>
+      </div>
+      <label class="field">\u7528\u6237\u540D<input name="username" required autocomplete="username"></label>
+      <label class="field">\u5BC6\u7801<input name="password" type="password" required autocomplete="current-password"></label>
+      <button class="primary" type="submit">\u767B\u5F55</button>
+      <div id="login-error" class="login-error"></div>
+      <p class="login-foot">\u8FD9\u91CC\u53EA\u5C55\u793A\u670D\u52A1\u5668\u5DF2\u7ECF\u6536\u5230\u7684\u526F\u672C\u3002\u6700\u8FD1 100 \u6761\u4E0D\u662F\u4E22\u5931\u6E05\u5355\uFF0C\u4E5F\u4E0D\u80FD\u5F53\u4F5C\u8BBA\u6587\u7ED3\u679C\u3002</p>
+    </form>
+  </div>
+  <div id="app" class="shell" hidden>
+    <aside id="sidebar" class="sidebar">
+      <div class="side-brand">
+        <svg class="mark" viewBox="0 0 32 32" aria-hidden="true"><rect width="32" height="32" rx="8" fill="#0E7C73"/><path d="M6 17h4l2.2-6 3.2 11 2.3-5H26" fill="none" stroke="#fff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        <div><strong>bylwapp</strong><span>\u6570\u636E\u91C7\u96C6\u7BA1\u7406\u7CFB\u7EDF</span></div>
+      </div>
+      <nav class="nav" id="nav">
+        <button type="button" data-view="overview" class="active"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M4 13h6V4H4v9zm10 7h6V4h-6v16zM4 20h6v-5H4v5z"/></svg>\u6982\u89C8</button>
+        <button type="button" data-view="devices"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="7" y="2" width="10" height="20" rx="2"/><path d="M11 18h2"/></svg>\u91C7\u96C6\u8BBE\u5907</button>
+        <button type="button" data-view="records"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M8 6h12M8 12h12M8 18h12M4 6h.01M4 12h.01M4 18h.01"/></svg>\u6570\u636E\u8BB0\u5F55</button>
+        <button type="button" data-view="research"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M4 19V5M4 19h16"/><path d="M8 15l4-5 3 3 5-7"/></svg>\u7814\u7A76\u6307\u6807</button>
+        <button type="button" data-view="reconcile"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M12 8v5M12 17h.01"/><path d="M10.3 4.5 2.8 18a2 2 0 0 0 1.7 3h15a2 2 0 0 0 1.7-3L13.7 4.5a2 2 0 0 0-3.4 0z"/></svg>\u5BF9\u8D26\u4E0E\u51B2\u7A81</button>
+        <button type="button" data-view="exports"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M12 4v10m0 0 4-4m-4 4-4-4"/><path d="M5 19h14"/></svg>\u6570\u636E\u5BFC\u51FA</button>
+        <div class="split"></div>
+        <button type="button" data-view="settings"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9c.3.6.9 1 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg>\u8BBE\u7F6E</button>
+      </nav>
+      <p class="side-note">\u6700\u8FD1 100 \u6761\u662F\u53EF\u89C1\u6027\u89C6\u56FE\uFF0C\u4E0D\u662F\u4E22\u5931\u6E05\u5355\uFF0C\u4E5F\u4E0D\u80FD\u5F53\u4F5C\u8BBA\u6587\u7ED3\u679C\u3002</p>
+    </aside>
+    <div id="backdrop" class="backdrop"></div>
+    <div class="workspace">
+      <header class="topbar">
+        <button id="menu" class="icon-btn" type="button" aria-label="\u6253\u5F00\u5BFC\u822A"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M4 7h16M4 12h16M4 17h16"/></svg></button>
+        <h1 id="view-title">\u6982\u89C8</h1>
+        <div class="top-actions">
+          <span id="updated" class="updated">\u5C1A\u672A\u5237\u65B0</span>
+          <button id="refresh" class="ghost" type="button">\u5237\u65B0</button>
+          <div class="user-wrap">
+            <button id="user-btn" class="user-btn" type="button"><strong id="user-name">\u2014</strong><span id="user-role">\u2014</span></button>
+            <div id="user-menu" class="user-menu" hidden><button id="logout" type="button">\u9000\u51FA\u767B\u5F55</button></div>
+          </div>
         </div>
-        <svg id="chart" viewBox="0 0 600 180"></svg>
-      </section>
-      <section>
-        <h2>\u6700\u8FD1 100 \u6761\u4E8B\u4EF6</h2>
-        <div id="events"></div>
-      </section>
-      <section>
-        <h2>\u51B2\u7A81</h2>
-        <p class="note">\u76F8\u540C event_id\u3001\u4E0D\u540C payload_hash \u65F6\u4FDD\u7559\u7B2C\u4E00\u4EFD\u56DE\u6267\u3002</p>
-        <div id="conflicts"></div>
-      </section>
-      <section id="pair-admin" hidden>
-        <h2>\u91C7\u96C6\u7AEF\u914D\u5BF9</h2>
-        <p class="note">\u767B\u8BB0\u91C7\u96C6\u7AEF\u540E\u751F\u6210 6 \u4F4D\u914D\u5BF9\u7801\u3002\u624B\u673A\u5728 10 \u5206\u949F\u5185\u8F93\u5165\u4E00\u6B21\uFF0C\u6362\u53D6\u8BBE\u5907\u4EE4\u724C\u3002\u7528\u8FC7\u5373\u5931\u6548\u3002</p>
-        <form id="device-form" class="row">
-          <label>\u91C7\u96C6\u7AEF ID<input name="device_id" required autocomplete="off"></label>
-          <label>\u540D\u79F0<input name="name" required autocomplete="off"></label>
-          <button type="submit">\u767B\u8BB0\u91C7\u96C6\u7AEF</button>
-        </form>
-        <form id="pair-form" class="row">
-          <label>\u91C7\u96C6\u7AEF ID<input name="device_id" required autocomplete="off"></label>
-          <button type="submit">\u751F\u6210\u914D\u5BF9\u7801</button>
-        </form>
-        <p id="pair-code" class="code"></p>
-        <p id="pair-note" class="note"></p>
-      </section>
-      <section class="row">
-        <button type="button" id="csv">\u5BFC\u51FA CSV</button>
-        <button type="button" id="json">\u5BFC\u51FA JSON</button>
-        <button type="button" id="recon">\u5BFC\u51FA\u5BF9\u8D26 JSON</button>
-        <button type="button" id="rq1">RQ1 JSON</button>
-        <button type="button" id="rq2">RQ2 JSON</button>
-        <button type="button" id="rq3">RQ3 JSON</button>
-        <button type="button" id="rq4">RQ4 JSON</button>
-      </section>
+      </header>
+      <div id="banner" class="banner"></div>
+      <main class="content">
+        <section id="view-overview">
+          <div id="kpi" class="kpi"></div>
+          <section class="panel">
+            <div class="panel-head">
+              <div>
+                <h2>\u8D8B\u52BF</h2>
+                <p class="sub" id="chart-sub">\u6309\u670D\u52A1\u5668\u6536\u5230\u7684\u65F6\u95F4</p>
+              </div>
+              <div class="toolbar">
+                <select id="series-type" aria-label="\u6307\u6807">
+                  <option value="heart_rate">\u5FC3\u7387</option>
+                  <option value="blood_pressure">\u8840\u538B\u6536\u7F29\u538B</option>
+                  <option value="spo2">\u8840\u6C27</option>
+                  <option value="temperature">\u4F53\u6E29</option>
+                  <option value="steps">\u6B65\u6570</option>
+                  <option value="stress">\u538B\u529B</option>
+                  <option value="hrv">\u5FC3\u7387\u53D8\u5F02</option>
+                </select>
+                <div class="seg" id="range">
+                  <button type="button" data-range="24h">24 \u5C0F\u65F6</button>
+                  <button type="button" data-range="7d" class="on">7 \u5929</button>
+                  <button type="button" data-range="30d">30 \u5929</button>
+                  <button type="button" data-range="all">\u5168\u90E8</button>
+                </div>
+              </div>
+            </div>
+            <div class="chart-wrap"><svg id="chart" class="chart" viewBox="0 0 720 240" role="img" aria-label="\u8D8B\u52BF\u56FE"></svg></div>
+          </section>
+          <section class="panel">
+            <div class="panel-head"><div><h2>\u91C7\u96C6\u7AEF\u72B6\u6001</h2><p class="sub">\u8D85\u8FC7 15 \u5206\u949F\u6CA1\u6709\u65B0\u56DE\u6267\u4F1A\u6807\u6210\u540C\u6B65\u504F\u65E7</p></div><button class="ghost" type="button" data-jump="devices">\u5168\u90E8\u8BBE\u5907</button></div>
+            <div id="overview-devices" class="device-grid"></div>
+          </section>
+        </section>
+        <section id="view-devices" hidden>
+          <section class="panel">
+            <div class="panel-head"><div><h2>\u91C7\u96C6\u8BBE\u5907</h2><p class="sub">\u624B\u673A\u5E94\u7528\u4F1A\u81EA\u52A8\u767B\u8BB0\u3002\u7BA1\u7406\u5458\u4E5F\u53EF\u4EE5\u5728\u8BBE\u7F6E\u91CC\u6DFB\u52A0\u3002</p></div></div>
+            <div id="device-table"></div>
+          </section>
+        </section>
+        <section id="view-records" hidden>
+          <section class="panel">
+            <div class="panel-head">
+              <div><h2>\u6570\u636E\u8BB0\u5F55</h2><p class="sub" id="records-note">\u6700\u8FD1 100 \u6761\u56DE\u6267</p></div>
+              <div class="toolbar">
+                <select id="filter-type" aria-label="\u7C7B\u578B"><option value="">\u5168\u90E8\u7C7B\u578B</option></select>
+                <select id="filter-device" aria-label="\u8BBE\u5907"><option value="">\u5168\u90E8\u8BBE\u5907</option></select>
+                <select id="filter-range" aria-label="\u65F6\u95F4"><option value="all">\u5168\u90E8\u65F6\u95F4</option><option value="24h">24 \u5C0F\u65F6</option><option value="7d">7 \u5929</option><option value="30d">30 \u5929</option></select>
+              </div>
+            </div>
+            <div id="records"></div>
+            <div class="pager"><span id="page-label"></span><span><button class="ghost" id="prev" type="button">\u4E0A\u4E00\u9875</button> <button class="ghost" id="next" type="button">\u4E0B\u4E00\u9875</button></span></div>
+          </section>
+        </section>
+        <section id="view-research" hidden>
+          <div id="rq" class="rq-grid"></div>
+        </section>
+        <section id="view-reconcile" hidden>
+          <div id="recon-kpi" class="kpi"></div>
+          <section class="panel">
+            <div class="panel-head"><div><h2>\u51B2\u7A81</h2><p class="sub">\u76F8\u540C event_id\u3001\u4E0D\u540C payload_hash \u65F6\u4FDD\u7559\u7B2C\u4E00\u4EFD\u56DE\u6267\u3002</p></div></div>
+            <div id="conflicts"></div>
+          </section>
+        </section>
+        <section id="view-exports" hidden>
+          <div class="export-grid" id="exports"></div>
+        </section>
+        <section id="view-settings" hidden>
+          <div class="forms">
+            <section class="panel" id="admin-forms">
+              <h2>\u767B\u8BB0\u91C7\u96C6\u7AEF</h2>
+              <p class="sub">\u53D1\u7ED9\u8FD8\u6CA1\u6709\u81EA\u52A8\u767B\u8BB0\u7684\u624B\u673A\u3002</p>
+              <form id="device-form" style="margin-top:12px">
+                <label class="field">\u91C7\u96C6\u7AEF ID<input name="device_id" required autocomplete="off"></label>
+                <label class="field">\u540D\u79F0<input name="name" required autocomplete="off"></label>
+                <button class="primary" type="submit" style="width:auto">\u767B\u8BB0</button>
+              </form>
+            </section>
+            <section class="panel">
+              <h2>6 \u4F4D\u914D\u5BF9\u7801</h2>
+              <p class="sub">10 \u5206\u949F\u5185\u6709\u6548\uFF0C\u624B\u673A\u7528\u4E00\u6B21\u540E\u5931\u6548\u3002</p>
+              <form id="pair-form" style="margin-top:12px">
+                <label class="field">\u91C7\u96C6\u7AEF ID<input name="device_id" required autocomplete="off"></label>
+                <button class="primary" type="submit" style="width:auto">\u751F\u6210\u914D\u5BF9\u7801</button>
+              </form>
+              <p id="pair-code" class="pair-code"></p>
+              <p id="pair-note" class="sub"></p>
+            </section>
+          </div>
+          <p id="settings-lock" class="empty" hidden><strong>\u9700\u8981\u7BA1\u7406\u5458</strong>\u62A4\u7406\u8005\u53EF\u4EE5\u67E5\u770B\u6570\u636E\uFF0C\u767B\u8BB0\u8BBE\u5907\u548C\u914D\u5BF9\u7801\u53EA\u5BF9\u7BA1\u7406\u5458\u5F00\u653E\u3002</p>
+        </section>
+      </main>
     </div>
-  </main>
+  </div>
+  <div id="drawer" class="drawer" hidden>
+    <div class="drawer-panel">
+      <header>
+        <div><h2 id="drawer-title">\u8BB0\u5F55</h2><p id="drawer-sub" class="sub"></p></div>
+        <button id="drawer-close" class="ghost" type="button">\u5173\u95ED</button>
+      </header>
+      <p id="drawer-hash" class="hash"></p>
+      <pre id="drawer-json"></pre>
+    </div>
+  </div>
   <script>
-    const banner = document.querySelector("#banner");
-    const tokenKey = "bylw_token";
-    const roleKey = "bylw_role";
-    function token() { return sessionStorage.getItem(tokenKey) || ""; }
-    function role() { return sessionStorage.getItem(roleKey) || ""; }
-    function showError(error) { banner.style.display = "block"; banner.textContent = error.message || String(error); }
-    function clearError() { banner.style.display = "none"; }
-    async function api(path, options) {
-      const response = await fetch(path, {
-        method: (options && options.method) || "GET",
-        headers: Object.assign({ Authorization: "Bearer " + token() }, (options && options.headers) || {}),
-        body: options && options.body
+    var TITLES = { overview: "\u6982\u89C8", devices: "\u91C7\u96C6\u8BBE\u5907", records: "\u6570\u636E\u8BB0\u5F55", research: "\u7814\u7A76\u6307\u6807 RQ1\u2013RQ4", reconcile: "\u5BF9\u8D26\u4E0E\u51B2\u7A81", exports: "\u6570\u636E\u5BFC\u51FA", settings: "\u8BBE\u7F6E" };
+    var TYPES = { blood_pressure: "\u8840\u538B", heart_rate: "\u5FC3\u7387", steps: "\u6B65\u6570", spo2: "\u8840\u6C27", sleep: "\u7761\u7720", sleep_session: "\u7761\u7720\u65F6\u6BB5", stress: "\u538B\u529B", hrv: "\u5FC3\u7387\u53D8\u5F02", temperature: "\u4F53\u6E29", operating_state: "\u8FD0\u884C\u72B6\u6001", reminder: "\u63D0\u9192", care_attention: "\u7167\u62A4\u5173\u6CE8", worn_state: "\u4F69\u6234", data_gap: "\u6570\u636E\u7F3A\u53E3", usability_task: "\u53EF\u7528\u6027\u4EFB\u52A1", sus: "SUS \u95EE\u5377" };
+    var KINDS = { blood_pressure: "\u8840\u538B\u8BA1", heart_rate: "\u5FC3\u7387\u5E26", ring: "\u6212\u6307", collector: "\u91C7\u96C6\u7AEF" };
+    var OPS = { NOMINAL: "\u6B63\u5E38", BLE_DISCONNECTED: "\u84DD\u7259\u65AD\u5F00", NETWORK_DEGRADED: "\u7F51\u7EDC\u964D\u7EA7", AUTH_FAILURE: "\u8BA4\u8BC1\u5931\u8D25", CLOCK_DEGRADED: "\u65F6\u949F\u5F02\u5E38" };
+    var PREFER = ["heart_rate", "blood_pressure", "spo2", "temperature", "steps", "stress", "hrv"];
+    var state = { token: "", role: "", username: "", view: "overview", devices: [], events: [], conflicts: [], series: [], seriesType: "heart_rate", seriesTouched: false, range: "7d", page: 1, pageSize: 8, loading: false, updatedAt: null, rq: null, recon: null, note: "" };
+    function $(id) { return document.getElementById(id); }
+    function token() { return sessionStorage.getItem("bylw_token") || ""; }
+    function clearError() { $("banner").style.display = "none"; }
+    function showError(error) { var el = $("banner"); el.style.display = "block"; el.textContent = error && error.message ? error.message : String(error); }
+    function api(path, options) {
+      var headers = { Authorization: "Bearer " + state.token };
+      if (options && options.headers) Object.keys(options.headers).forEach(function (key) { headers[key] = options.headers[key]; });
+      return fetch(path, { method: (options && options.method) || "GET", headers: headers, body: options && options.body }).then(function (response) {
+        return response.text().then(function (text) {
+          var data = text ? JSON.parse(text) : null;
+          if (response.status === 401) { logout(); throw new Error("\u8BF7\u91CD\u65B0\u767B\u5F55"); }
+          if (!response.ok) throw new Error((data && data.error) || response.statusText);
+          return data;
+        });
       });
-      const text = await response.text();
-      const data = text ? JSON.parse(text) : null;
-      if (response.status === 401) { logout(); throw new Error("\u8BF7\u91CD\u65B0\u767B\u5F55"); }
-      if (!response.ok) throw new Error((data && data.error) || response.statusText);
-      return data;
     }
-    function cell(text) { const td = document.createElement("td"); td.textContent = text == null ? "" : String(text); return td; }
+    function shanghai(date) {
+      return new Intl.DateTimeFormat("zh-CN", { timeZone: "Asia/Shanghai", month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit", hourCycle: "h23" }).format(date);
+    }
+    function dayKey(date) {
+      return new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Shanghai", year: "numeric", month: "2-digit", day: "2-digit" }).format(date);
+    }
+    function relative(iso) {
+      if (!iso) return "\u5C1A\u65E0\u4E0A\u62A5";
+      var date = new Date(iso);
+      if (isNaN(date.getTime())) return "\u65F6\u95F4\u672A\u77E5";
+      var diff = Date.now() - date.getTime();
+      var abs = shanghai(date);
+      if (diff < 0) return abs;
+      if (diff < 60000) return "\u521A\u521A";
+      if (diff < 3600000) return Math.floor(diff / 60000) + " \u5206\u949F\u524D";
+      if (diff < 86400000) return Math.floor(diff / 3600000) + " \u5C0F\u65F6\u524D";
+      if (diff < 7 * 86400000) return Math.floor(diff / 86400000) + " \u5929\u524D";
+      return abs;
+    }
+    function within(iso, range) {
+      if (!range || range === "all" || !iso) return range === "all" || !range;
+      var diff = Date.now() - new Date(iso).getTime();
+      if (range === "24h") return diff <= 86400000;
+      if (range === "7d") return diff <= 7 * 86400000;
+      if (range === "30d") return diff <= 30 * 86400000;
+      return true;
+    }
+    function num(value) {
+      if (typeof value !== "number" || !isFinite(value)) return value == null ? "" : String(value);
+      if (Math.abs(value - Math.round(value)) < 1e-6) return String(Math.round(value));
+      return String(Math.round(value * 10) / 10);
+    }
+    function humanValue(event) {
+      var v = event.values || {};
+      var t = event.measurement_type;
+      if (t === "heart_rate" && v.bpm != null) return "\u5FC3\u7387 " + num(v.bpm) + " bpm";
+      if (t === "blood_pressure" && v.systolic != null) return "\u8840\u538B " + num(v.systolic) + "/" + num(v.diastolic) + " mmHg" + (v.pulse != null ? " \xB7 \u8109\u640F " + num(v.pulse) : "");
+      if (t === "spo2" && v.spo2 != null) return "\u8840\u6C27 " + num(v.spo2) + "%";
+      if (t === "temperature" && v.celsius != null) return "\u4F53\u6E29 " + num(v.celsius) + " \xB0C";
+      if (t === "steps" && v.steps != null) return "\u6B65\u6570 " + num(v.steps);
+      if (t === "stress" && v.stress != null) return "\u538B\u529B " + num(v.stress);
+      if (t === "hrv" && v.hrv_ms != null) return "HRV " + num(v.hrv_ms) + " ms";
+      if (t === "sleep" || t === "sleep_session") return (TYPES[t] || "\u7761\u7720") + (v.stage ? " " + v.stage : "") + (v.duration_min != null ? " " + num(v.duration_min) + " \u5206\u949F" : "");
+      if (t === "worn_state") return v.worn ? "\u4F69\u6234\u4E2D" : "\u672A\u4F69\u6234";
+      if (t === "reminder") return "\u63D0\u9192 " + (v.disposition || "");
+      if (t === "operating_state") return "\u8FD0\u884C " + (OPS[v.state] || v.state || OPS[event.operating_state] || "");
+      if (t === "sus") return "SUS \u95EE\u5377";
+      return (TYPES[t] || t || "\u8BB0\u5F55") + (event.unit ? " \xB7 " + event.unit : "");
+    }
+    function deviceStatus(device) {
+      if (!device.last_received_at) return { cls: "neutral", text: "\u672A\u4E0A\u62A5" };
+      if (device.stale) return { cls: "wait", text: "\u540C\u6B65\u504F\u65E7" };
+      return { cls: "ok", text: "\u5728\u7EBF" };
+    }
+    function el(tag, className, text) {
+      var node = document.createElement(tag);
+      if (className) node.className = className;
+      if (text != null) node.textContent = text;
+      return node;
+    }
+    function badge(info) { return el("span", "badge " + info.cls, info.text); }
+    function empty(title, text) {
+      var box = el("div", "empty");
+      box.append(el("strong", "", title), document.createTextNode(text));
+      return box;
+    }
     function table(headers, rows) {
-      const el = document.createElement("table");
-      const head = document.createElement("tr");
-      headers.forEach((label) => { const th = document.createElement("th"); th.textContent = label; head.append(th); });
-      el.append(head);
-      rows.forEach((row) => { const tr = document.createElement("tr"); row.forEach((value) => tr.append(cell(value))); el.append(tr); });
-      return el;
-    }
-    function showAdmin() {
-      document.querySelector("#pair-admin").hidden = role() !== "admin";
-    }
-    async function refresh() {
-      clearError();
-      showAdmin();
-      const devices = await api("/api/v1/dashboard/devices");
-      const host = document.querySelector("#devices");
-      host.replaceChildren();
-      if (!devices.length) host.textContent = "\u8FD8\u6CA1\u6709\u767B\u8BB0\u91C7\u96C6\u7AEF\u3002";
-      devices.forEach((device) => {
-        const card = document.createElement("div");
-        card.className = "card";
-        card.innerHTML = "<strong></strong><div></div><div></div><div></div>";
-        card.children[0].textContent = device.name + " (" + device.device_id + ")";
-        card.children[1].textContent = (device.sensor_model || "\u5C1A\u65E0\u4E8B\u4EF6") + " \xB7 " + (device.operating_state || "\u672A\u77E5");
-        card.children[2].textContent = device.last_received_at ? "\u6700\u8FD1\u56DE\u6267 " + device.last_received_at : "\u8FD8\u6CA1\u6709\u56DE\u6267";
-        card.children[3].textContent = "\u51B2\u7A81 " + device.open_conflicts + " \xB7 \u91CD\u590D\u786E\u8BA4 " + device.duplicate_acks + (device.stale ? " \xB7 \u540C\u6B65\u504F\u65E7" : "");
-        if (device.stale) card.children[3].className = "stale";
-        host.append(card);
+      var tableEl = document.createElement("table");
+      var head = document.createElement("tr");
+      headers.forEach(function (label) { head.append(el("th", "", label)); });
+      tableEl.append(head);
+      rows.forEach(function (row) {
+        var tr = document.createElement("tr");
+        row.cells.forEach(function (cell) { var td = document.createElement("td"); if (cell instanceof Node) td.append(cell); else td.textContent = cell == null ? "" : String(cell); tr.append(td); });
+        if (row.onClick) tr.addEventListener("click", row.onClick);
+        tableEl.append(tr);
       });
-      const events = await api("/api/v1/dashboard/events");
-      const eventHost = document.querySelector("#events");
-      eventHost.replaceChildren();
-      const rows = (events.events || []).map((item) => [
-        item.server_received_at, item.event.device_id, item.event.measurement_type, item.event.unit,
-        JSON.stringify(item.event.values), item.event.operating_state
-      ]);
-      eventHost.append(rows.length ? table(["\u670D\u52A1\u5668\u56DE\u6267\u65F6\u95F4", "\u91C7\u96C6\u7AEF", "\u7C7B\u578B", "\u5355\u4F4D", "\u6570\u503C", "\u8FD0\u884C\u72B6\u6001"], rows) : document.createTextNode("\u8FD8\u6CA1\u6709\u4E8B\u4EF6\u3002"));
-      const conflicts = await api("/api/v1/dashboard/conflicts");
-      const conflictHost = document.querySelector("#conflicts");
-      conflictHost.replaceChildren();
-      conflictHost.append(conflicts.length ? table(["\u65F6\u95F4", "\u91C7\u96C6\u7AEF", "event_id", "\u5DF2\u4FDD\u7559\u54C8\u5E0C", "\u540E\u5230\u54C8\u5E0C"], conflicts.map((row) => [row.at, row.device_id, row.event_id, row.stored_hash, row.presented_hash])) : document.createTextNode("\u6CA1\u6709\u51B2\u7A81\u3002"));
-      await drawSeries();
+      return tableEl;
     }
-    async function drawSeries() {
-      const type = document.querySelector("#series-type").value;
-      const points = await api("/api/v1/dashboard/series?type=" + encodeURIComponent(type));
-      const svg = document.querySelector("#chart");
+    function chooseSeriesType(events) {
+      var seen = {};
+      events.forEach(function (item) { if (item.event) seen[item.event.measurement_type] = true; });
+      for (var i = 0; i < PREFER.length; i++) if (seen[PREFER[i]]) return PREFER[i];
+      return "heart_rate";
+    }
+    function setLoading(on) {
+      state.loading = on;
+      $("refresh").disabled = on;
+      if (on && !state.devices.length && !state.events.length) {
+        $("kpi").replaceChildren();
+        for (var i = 0; i < 6; i++) {
+          var card = el("article", "card");
+          card.append(el("div", "label sk", "\u6307\u6807"), el("div", "value sk", "00"), el("div", "hint sk", "\u52A0\u8F7D"));
+          $("kpi").append(card);
+        }
+      }
+    }
+    function paintUser() {
+      $("user-name").textContent = state.username || "\u5DF2\u767B\u5F55";
+      $("user-role").textContent = state.role === "admin" ? "\u7BA1\u7406\u5458" : state.role === "caregiver" ? "\u62A4\u7406\u8005" : "\u7528\u6237";
+      var admin = state.role === "admin";
+      $("admin-forms").hidden = !admin;
+      $("pair-form").parentElement.hidden = !admin;
+      $("settings-lock").hidden = admin;
+    }
+    function showView(name) {
+      state.view = name;
+      Object.keys(TITLES).forEach(function (key) {
+        var section = $("view-" + key);
+        if (section) section.hidden = key !== name;
+      });
+      $("view-title").textContent = TITLES[name];
+      document.querySelectorAll("#nav button").forEach(function (button) { button.classList.toggle("active", button.getAttribute("data-view") === name); });
+      $("sidebar").classList.remove("open");
+      $("backdrop").classList.remove("show");
+      if (name === "research") ensureRQ();
+      if (name === "reconcile") ensureRecon();
+    }
+    function renderAll() {
+      renderKpi();
+      renderChart();
+      renderOverviewDevices();
+      renderDeviceTable();
+      renderRecords();
+      renderConflicts();
+      if (state.updatedAt) $("updated").textContent = "\u66F4\u65B0\u4E8E " + shanghai(state.updatedAt);
+    }
+    function renderKpi() {
+      var eventsTotal = state.devices.reduce(function (sum, device) { return sum + (device.event_count || 0); }, 0);
+      var conflicts = state.devices.reduce(function (sum, device) { return sum + (device.open_conflicts || 0); }, 0);
+      var duplicates = state.devices.reduce(function (sum, device) { return sum + (device.duplicate_acks || 0); }, 0);
+      var today = dayKey(new Date());
+      var todayCount = state.events.filter(function (item) { return item.server_received_at && dayKey(new Date(item.server_received_at)) === today; }).length;
+      var latest = null;
+      state.devices.forEach(function (device) {
+        if (device.last_received_at && (!latest || device.last_received_at > latest)) latest = device.last_received_at;
+      });
+      var cards = [
+        ["\u8BBE\u5907\u6570", String(state.devices.length), "\u5DF2\u767B\u8BB0\u91C7\u96C6\u7AEF"],
+        ["\u4E8B\u4EF6\u603B\u6570", String(eventsTotal), "\u5168\u90E8\u5DF2\u5165\u5E93"],
+        ["\u4ECA\u65E5\u4E8B\u4EF6", String(todayCount), "\u4E0A\u6D77\u65F6\u533A \xB7 \u6700\u8FD1 100 \u6761\u5185"],
+        ["\u51B2\u7A81", String(conflicts), "\u4FDD\u7559\u9996\u6B21\u56DE\u6267"],
+        ["\u91CD\u590D\u786E\u8BA4", String(duplicates), "\u76F8\u540C\u54C8\u5E0C\u518D\u6B21\u4E0A\u4F20"],
+        ["\u6700\u8FD1\u4E0A\u62A5", latest ? relative(latest) : "\u5C1A\u65E0", latest ? shanghai(new Date(latest)) : "\u8FD8\u6CA1\u6709\u56DE\u6267"]
+      ];
+      $("kpi").replaceChildren();
+      cards.forEach(function (item) {
+        var card = el("article", "card");
+        card.append(el("div", "label", item[0]), el("div", "value", item[1]), el("div", "hint", item[2]));
+        $("kpi").append(card);
+      });
+    }
+    function renderChart() {
+      var svg = $("chart");
       svg.replaceChildren();
-      const ordered = [...points].reverse();
-      if (ordered.length < 2) {
-        const text = document.createElementNS("http://www.w3.org/2000/svg", "text");
-        text.setAttribute("x", "16"); text.setAttribute("y", "90"); text.textContent = "\u81F3\u5C11\u9700\u8981\u4E24\u4E2A\u70B9\u624D\u753B\u8D8B\u52BF\u3002";
+      var points = state.series.filter(function (point) { return within(point.at, state.range); }).slice().reverse();
+      var label = ($("series-type").selectedOptions[0] && $("series-type").selectedOptions[0].textContent) || "\u6307\u6807";
+      $("chart-sub").textContent = points.length ? label + " \xB7 " + points.length + " \u4E2A\u70B9 \xB7 \u670D\u52A1\u5668\u6536\u5230\u65F6\u95F4\uFF08\u4E0A\u6D77\uFF09" : label + "\u5728\u8FD9\u4E2A\u65F6\u95F4\u8303\u56F4\u5185\u8FD8\u6CA1\u6709\u70B9";
+      if (points.length < 2) {
+        var text = document.createElementNS("http://www.w3.org/2000/svg", "text");
+        text.setAttribute("x", "24"); text.setAttribute("y", "120"); text.setAttribute("fill", "#5d6d69");
+        text.textContent = points.length === 0 ? "\u8FD8\u6CA1\u6709\u8DB3\u591F\u7684\u6570\u636E\u3002" : "\u81F3\u5C11\u9700\u8981\u4E24\u4E2A\u70B9\u624D\u753B\u8D8B\u52BF\u3002";
         svg.append(text);
         return;
       }
-      const values = ordered.map((point) => point.value);
-      const min = Math.min(...values), max = Math.max(...values);
-      const span = max - min || 1;
-      const poly = ordered.map((point, index) => {
-        const x = 16 + (index * 568) / (ordered.length - 1);
-        const y = 160 - ((point.value - min) / span) * 140;
+      var values = points.map(function (point) { return Number(point.value) || 0; });
+      var min = Math.min.apply(null, values);
+      var max = Math.max.apply(null, values);
+      var span = max - min || 1;
+      var ns = "http://www.w3.org/2000/svg";
+      for (var g = 0; g < 4; g++) {
+        var gy = 28 + g * 48;
+        var grid = document.createElementNS(ns, "line");
+        grid.setAttribute("x1", "56"); grid.setAttribute("x2", "700"); grid.setAttribute("y1", String(gy)); grid.setAttribute("y2", String(gy));
+        grid.setAttribute("stroke", "#e4eeeb");
+        svg.append(grid);
+      }
+      var coords = points.map(function (point, index) {
+        var x = 56 + (index * 644) / (points.length - 1);
+        var y = 200 - ((Number(point.value) - min) / span) * 160;
         return x.toFixed(1) + "," + y.toFixed(1);
       }).join(" ");
-      const line = document.createElementNS("http://www.w3.org/2000/svg", "polyline");
-      line.setAttribute("fill", "none"); line.setAttribute("stroke", "#0f6e56"); line.setAttribute("stroke-width", "2");
-      line.setAttribute("points", poly);
+      var line = document.createElementNS(ns, "polyline");
+      line.setAttribute("fill", "none"); line.setAttribute("stroke", "#0E7C73"); line.setAttribute("stroke-width", "2.5"); line.setAttribute("points", coords);
       svg.append(line);
+      var minLabel = document.createElementNS(ns, "text");
+      minLabel.setAttribute("x", "48"); minLabel.setAttribute("y", "204"); minLabel.setAttribute("text-anchor", "end"); minLabel.setAttribute("fill", "#5d6d69"); minLabel.setAttribute("font-size", "12");
+      minLabel.textContent = num(min);
+      var maxLabel = document.createElementNS(ns, "text");
+      maxLabel.setAttribute("x", "48"); maxLabel.setAttribute("y", "36"); maxLabel.setAttribute("text-anchor", "end"); maxLabel.setAttribute("fill", "#5d6d69"); maxLabel.setAttribute("font-size", "12");
+      maxLabel.textContent = num(max);
+      svg.append(minLabel, maxLabel);
     }
-    async function download(path, filename) {
-      const response = await fetch(path, { headers: { Authorization: "Bearer " + token() } });
-      if (!response.ok) { showError(new Error("\u5BFC\u51FA\u5931\u8D25")); return; }
-      const blob = await response.blob();
-      const link = document.createElement("a");
-      link.href = URL.createObjectURL(blob);
-      link.download = filename;
-      link.click();
+    function deviceCard(device) {
+      var card = el("article", "card device-card");
+      var header = el("header");
+      var title = el("div");
+      title.append(el("h3", "", device.name || device.device_id));
+      title.append(el("div", "meta", device.device_id));
+      header.append(title, badge(deviceStatus(device)));
+      var body = el("div", "meta", (KINDS[device.sensor_kind] || device.sensor_kind || "\u5C1A\u65E0\u4F20\u611F\u5668") + (device.sensor_model ? " \xB7 " + device.sensor_model : ""));
+      var when = el("div", "meta", device.last_received_at ? "\u6700\u8FD1\u4E0A\u62A5 " + relative(device.last_received_at) + " \xB7 " + shanghai(new Date(device.last_received_at)) : "\u8FD8\u6CA1\u6709\u56DE\u6267");
+      var counts = el("div", "meta", "\u4E8B\u4EF6 " + (device.event_count || 0) + " \xB7 \u51B2\u7A81 " + (device.open_conflicts || 0) + " \xB7 \u91CD\u590D " + (device.duplicate_acks || 0));
+      card.append(header, body, when, counts);
+      return card;
+    }
+    function renderOverviewDevices() {
+      var host = $("overview-devices");
+      host.replaceChildren();
+      if (!state.devices.length) { host.append(empty("\u8FD8\u6CA1\u6709\u91C7\u96C6\u7AEF", "\u624B\u673A\u6253\u5F00\u5E94\u7528\u540E\u4F1A\u81EA\u52A8\u767B\u8BB0\u3002")); return; }
+      state.devices.slice(0, 6).forEach(function (device) { host.append(deviceCard(device)); });
+    }
+    function renderDeviceTable() {
+      var host = $("device-table");
+      host.replaceChildren();
+      if (!state.devices.length) { host.append(empty("\u8FD8\u6CA1\u6709\u91C7\u96C6\u7AEF", "\u767B\u8BB0\u4E4B\u540E\u4F1A\u51FA\u73B0\u5728\u8FD9\u5F20\u8868\u91CC\u3002")); return; }
+      host.append(table(["\u540D\u79F0", "\u72B6\u6001", "\u4F20\u611F\u5668", "\u6700\u8FD1\u4E0A\u62A5", "\u4E8B\u4EF6", "\u51B2\u7A81", "\u91CD\u590D\u786E\u8BA4"], state.devices.map(function (device) {
+        return { cells: [device.name + " (" + device.device_id + ")", badge(deviceStatus(device)), (KINDS[device.sensor_kind] || "\u2014") + (device.sensor_model ? " \xB7 " + device.sensor_model : ""), device.last_received_at ? relative(device.last_received_at) : "\u5C1A\u65E0\u4E0A\u62A5", device.event_count || 0, device.open_conflicts || 0, device.duplicate_acks || 0] };
+      })));
+    }
+    function filteredEvents() {
+      var type = $("filter-type").value;
+      var device = $("filter-device").value;
+      var range = $("filter-range").value;
+      return state.events.filter(function (item) {
+        var event = item.event || {};
+        if (type && event.measurement_type !== type) return false;
+        if (device && event.device_id !== device) return false;
+        if (!within(item.server_received_at, range)) return false;
+        return true;
+      });
+    }
+    function fillFilters() {
+      var type = $("filter-type");
+      var device = $("filter-device");
+      var typeValue = type.value;
+      var deviceValue = device.value;
+      type.replaceChildren(new Option("\u5168\u90E8\u7C7B\u578B", ""));
+      var seen = {};
+      state.events.forEach(function (item) { if (item.event) seen[item.event.measurement_type] = true; });
+      Object.keys(TYPES).forEach(function (key) { if (seen[key]) type.append(new Option(TYPES[key], key)); });
+      type.value = typeValue;
+      device.replaceChildren(new Option("\u5168\u90E8\u8BBE\u5907", ""));
+      state.devices.forEach(function (item) { device.append(new Option(item.name || item.device_id, item.device_id)); });
+      if ([].some.call(device.options, function (option) { return option.value === deviceValue; })) device.value = deviceValue;
+    }
+    function renderRecords() {
+      fillFilters();
+      $("records-note").textContent = state.note || "\u6700\u8FD1 100 \u6761\u56DE\u6267\u3002\u70B9\u51FB\u4E00\u884C\u67E5\u770B\u539F\u59CB JSON\u3002";
+      var rows = filteredEvents();
+      var pages = Math.max(1, Math.ceil(rows.length / state.pageSize));
+      if (state.page > pages) state.page = pages;
+      var start = (state.page - 1) * state.pageSize;
+      var slice = rows.slice(start, start + state.pageSize);
+      var host = $("records");
+      host.replaceChildren();
+      if (!slice.length) { host.append(empty("\u6CA1\u6709\u8BB0\u5F55", "\u6362\u4E00\u4E2A\u7C7B\u578B\u3001\u8BBE\u5907\u6216\u65F6\u95F4\u8303\u56F4\u3002")); }
+      else host.append(table(["\u65F6\u95F4", "\u8BBE\u5907", "\u5185\u5BB9", "\u8FD0\u884C\u72B6\u6001"], slice.map(function (item) {
+        var event = item.event || {};
+        var when = item.server_received_at ? relative(item.server_received_at) + " \xB7 " + shanghai(new Date(item.server_received_at)) : "\u65F6\u95F4\u672A\u77E5";
+        return { cells: [when, event.device_id || "", humanValue(event), OPS[event.operating_state] || event.operating_state || ""], onClick: function () { openDrawer(item); } };
+      })));
+      $("page-label").textContent = rows.length ? "\u7B2C " + state.page + " / " + pages + " \u9875 \xB7 \u5171 " + rows.length + " \u6761" : "\u6CA1\u6709\u5339\u914D\u7684\u8BB0\u5F55";
+      $("prev").disabled = state.page <= 1;
+      $("next").disabled = state.page >= pages;
+    }
+    function openDrawer(item) {
+      var event = item.event || {};
+      $("drawer-title").textContent = humanValue(event);
+      $("drawer-sub").textContent = (event.device_id || "") + " \xB7 " + relative(item.server_received_at) + " \xB7 " + (item.server_received_at ? shanghai(new Date(item.server_received_at)) : "");
+      $("drawer-hash").textContent = "payload_hash " + (item.payload_hash || "");
+      var payload = { server_received_at: item.server_received_at, payload_hash: item.payload_hash, event: event };
+      if (item.canonical_json) payload.canonical_json = item.canonical_json;
+      $("drawer-json").textContent = JSON.stringify(payload, null, 2);
+      $("drawer").hidden = false;
+    }
+    function rateText(rate) {
+      if (!rate || rate.status !== "computed" || rate.value == null) return "\u2014";
+      var pct = Math.round(rate.value * 1000) / 10;
+      return (pct % 1 === 0 ? String(pct.toFixed(0)) : String(pct)) + "%";
+    }
+    function rateCard(title, rate) {
+      var box = el("div", "stat");
+      box.append(el("b", "", rateText(rate)), el("span", "", title + (rate && rate.status !== "computed" ? " \xB7 \u5C1A\u4E0D\u53EF\u8BA1\u7B97" : "")));
+      if (rate && rate.reason && rate.status !== "computed") box.append(el("span", "", rate.reason));
+      else if (rate) box.append(el("span", "", (rate.numerator || 0) + " / " + (rate.denominator || 0)));
+      return box;
+    }
+    function renderRQ() {
+      var host = $("rq");
+      host.replaceChildren();
+      if (!state.rq) { host.append(empty("\u6B63\u5728\u8BFB\u53D6\u7814\u7A76\u6307\u6807", "RQ1 \u5230 RQ4 \u6765\u81EA\u5BFC\u51FA\u63A5\u53E3\u3002")); return; }
+      var specs = [
+        ["RQ1 \u63D0\u9192", state.rq.rq1, [["\u786E\u8BA4\u7387", "ack_rate"], ["\u6F0F\u62A5\u7387", "miss_rate"], ["\u89C2\u5BDF\u8005\u9001\u8FBE\u7387", "delivery_rate"]]],
+        ["RQ2 \u5BF9\u7167", state.rq.rq2, [["\u53EC\u56DE\u7387", "recall"], ["\u7279\u5F02\u5EA6", "specificity"]]],
+        ["RQ3 \u56DE\u6267", state.rq.rq3, [["\u91CD\u590D\u5C1D\u8BD5\u7387", "duplicate_attempt_rate"]]],
+        ["RQ4 \u53EF\u7528\u6027", state.rq.rq4, []]
+      ];
+      specs.forEach(function (spec) {
+        var report = spec[1] || {};
+        var card = el("article", "panel");
+        var head = el("div", "panel-head");
+        head.append(el("h2", "", spec[0]));
+        var status = report.ack_rate || report.recall || report.duplicate_attempt_rate || (report.sus && report.sus[0]);
+        if (status && status.status) head.append(badge(status.status === "computed" ? { cls: "ok", text: "\u5DF2\u8BA1\u7B97" } : { cls: "wait", text: "\u5C1A\u4E0D\u53EF\u8BA1\u7B97" }));
+        else head.append(badge({ cls: "neutral", text: "\u6C47\u603B" }));
+        card.append(head);
+        var grid = el("div", "rq-stats");
+        spec[2].forEach(function (pair) { grid.append(rateCard(pair[0], report[pair[1]])); });
+        if (spec[0].indexOf("RQ2") === 0 && report.confusion) {
+          var unmatched = el("div", "stat");
+          unmatched.append(el("b", "", String(report.unmatched_ground_truth || 0)), el("span", "", "\u672A\u5339\u914D\u5BF9\u7167\uFF0C\u4E0D\u8BA1\u5165\u9519\u8BEF"));
+          grid.append(unmatched);
+        }
+        if (spec[0].indexOf("RQ3") === 0) {
+          [["\u5DF2\u5B58\u50A8", report.stored_events], ["\u91CD\u590D\u786E\u8BA4", report.duplicate_acks], ["\u51B2\u7A81", report.conflicts]].forEach(function (pair) {
+            var box = el("div", "stat");
+            box.append(el("b", "", String(pair[1] || 0)), el("span", "", pair[0]));
+            grid.append(box);
+          });
+        }
+        if (spec[0].indexOf("RQ4") === 0) {
+          var tasks = report.task_dispositions || {};
+          Object.keys(tasks).forEach(function (key) {
+            var box = el("div", "stat");
+            box.append(el("b", "", String(tasks[key])), el("span", "", key));
+            grid.append(box);
+          });
+          (report.sus || []).forEach(function (item) {
+            var box = el("div", "stat");
+            box.append(el("b", "", item.score == null ? "\u2014" : String(item.score)), el("span", "", "SUS " + (item.status === "computed" ? "\u5DF2\u8BA1\u7B97" : "\u5C1A\u4E0D\u53EF\u8BA1\u7B97" + (item.reason ? " \xB7 " + item.reason : ""))));
+            grid.append(box);
+          });
+        }
+        card.append(grid, el("p", "sub", report.note || ""));
+        host.append(card);
+      });
+    }
+    function ensureRQ() {
+      if (state.rq) { renderRQ(); return; }
+      $("rq").replaceChildren(empty("\u6B63\u5728\u8BFB\u53D6", "\u7A0D\u7B49\u4E00\u4E0B\u3002"));
+      Promise.all(["rq1", "rq2", "rq3", "rq4"].map(function (name) { return api("/api/v1/exports/" + name + ".json"); })).then(function (rows) {
+        state.rq = { rq1: rows[0], rq2: rows[1], rq3: rows[2], rq4: rows[3] };
+        renderRQ();
+      }).catch(showError);
+    }
+    function renderConflicts() {
+      var host = $("conflicts");
+      var kpi = $("recon-kpi");
+      kpi.replaceChildren();
+      var counts = state.recon && state.recon.counts ? state.recon.counts : null;
+      var cards = counts ? [["\u5DF2\u5B58\u50A8", counts.stored_events], ["\u91CD\u590D\u786E\u8BA4", counts.duplicate_acks], ["\u51B2\u7A81", counts.conflicts]] : [["\u51B2\u7A81\u8BB0\u5F55", state.conflicts.length]];
+      cards.forEach(function (item) {
+        var card = el("article", "card");
+        card.append(el("div", "label", item[0]), el("div", "value", String(item[1] == null ? 0 : item[1])), el("div", "hint", "\u670D\u52A1\u5668\u56DE\u6267\uFF0C\u4E0D\u662F\u4E22\u5931\u4F30\u8BA1"));
+        kpi.append(card);
+      });
+      host.replaceChildren();
+      var rows = (state.recon && state.recon.conflicts) || state.conflicts;
+      if (!rows.length) { host.append(empty("\u6CA1\u6709\u51B2\u7A81", "\u76F8\u540C\u5185\u5BB9\u7684\u91CD\u590D\u4E0A\u4F20\u4E0D\u4F1A\u51FA\u73B0\u5728\u8FD9\u91CC\u3002")); return; }
+      host.append(table(["\u65F6\u95F4", "\u91C7\u96C6\u7AEF", "event_id", "\u5DF2\u4FDD\u7559\u54C8\u5E0C", "\u540E\u5230\u54C8\u5E0C"], rows.map(function (row) {
+        return { cells: [relative(row.at), row.device_id, row.event_id, row.stored_hash, row.presented_hash] };
+      })));
+    }
+    function ensureRecon() {
+      if (state.recon) { renderConflicts(); return; }
+      api("/api/v1/exports/reconciliation.json").then(function (data) { state.recon = data; renderConflicts(); }).catch(showError);
+    }
+    function renderExports() {
+      var items = [
+        ["/api/v1/exports/events.csv", "events.csv", "\u4E8B\u4EF6 CSV", "\u56DE\u6267\u65F6\u95F4\u3001\u8BBE\u5907\u548C\u6570\u503C"],
+        ["/api/v1/exports/events.json", "events.json", "\u4E8B\u4EF6 JSON", "\u539F\u59CB\u56DE\u6267\u65E5\u5FD7"],
+        ["/api/v1/exports/reconciliation.json", "reconciliation.json", "\u5BF9\u8D26 JSON", "\u5B58\u50A8\u3001\u91CD\u590D\u548C\u51B2\u7A81\u8BA1\u6570"],
+        ["/api/v1/exports/rq1.json", "rq1.json", "RQ1 JSON", "\u63D0\u9192\u786E\u8BA4\u4E0E\u9001\u8FBE"],
+        ["/api/v1/exports/rq2.json", "rq2.json", "RQ2 JSON", "\u5BF9\u7167\u6DF7\u6DC6\u77E9\u9635"],
+        ["/api/v1/exports/rq3.json", "rq3.json", "RQ3 JSON", "\u4E0A\u4F20\u56DE\u6267"],
+        ["/api/v1/exports/rq4.json", "rq4.json", "RQ4 JSON", "\u4EFB\u52A1\u4E0E SUS"]
+      ];
+      var host = $("exports");
+      host.replaceChildren();
+      items.forEach(function (item) {
+        var button = el("button", "panel");
+        button.type = "button";
+        button.append(document.createTextNode(item[2]), el("small", "", item[3]));
+        button.addEventListener("click", function () { download(item[0], item[1]); });
+        host.append(button);
+      });
+    }
+    function download(path, filename) {
+      fetch(path, { headers: { Authorization: "Bearer " + state.token } }).then(function (response) {
+        if (!response.ok) throw new Error("\u5BFC\u51FA\u5931\u8D25");
+        return response.blob();
+      }).then(function (blob) {
+        var link = document.createElement("a");
+        link.href = URL.createObjectURL(blob);
+        link.download = filename;
+        link.click();
+      }).catch(showError);
+    }
+    function refresh() {
+      clearError();
+      setLoading(true);
+      Promise.all([
+        api("/api/v1/dashboard/devices"),
+        api("/api/v1/dashboard/events"),
+        api("/api/v1/dashboard/conflicts")
+      ]).then(function (rows) {
+        state.devices = Array.isArray(rows[0]) ? rows[0] : [];
+        state.events = rows[1] && Array.isArray(rows[1].events) ? rows[1].events : [];
+        state.note = rows[1] && rows[1].note ? rows[1].note : "";
+        state.conflicts = Array.isArray(rows[2]) ? rows[2] : [];
+        if (!state.seriesTouched) {
+          state.seriesType = chooseSeriesType(state.events);
+          $("series-type").value = state.seriesType;
+        }
+        return api("/api/v1/dashboard/series?type=" + encodeURIComponent(state.seriesType));
+      }).then(function (series) {
+        state.series = Array.isArray(series) ? series : [];
+        state.updatedAt = new Date();
+        state.rq = null;
+        state.recon = null;
+        renderAll();
+        if (state.view === "research") ensureRQ();
+        if (state.view === "reconcile") ensureRecon();
+      }).catch(showError).then(function () { setLoading(false); });
     }
     function logout() {
-      sessionStorage.removeItem(tokenKey);
-      sessionStorage.removeItem(roleKey);
-      document.querySelector("#login").hidden = false;
-      document.querySelector("#app").hidden = true;
-      document.querySelector("#logout").hidden = true;
+      sessionStorage.removeItem("bylw_token");
+      sessionStorage.removeItem("bylw_role");
+      sessionStorage.removeItem("bylw_user");
+      state.token = "";
+      $("app").hidden = true;
+      $("login-screen").hidden = false;
+      $("user-menu").hidden = true;
     }
     function signedIn(data) {
-      sessionStorage.setItem(tokenKey, data.token);
-      sessionStorage.setItem(roleKey, data.role || "");
-      document.querySelector("#login").hidden = true;
-      document.querySelector("#app").hidden = false;
-      document.querySelector("#logout").hidden = false;
+      state.token = data.token;
+      state.role = data.role || "";
+      state.username = data.username || "";
+      sessionStorage.setItem("bylw_token", state.token);
+      sessionStorage.setItem("bylw_role", state.role);
+      sessionStorage.setItem("bylw_user", state.username);
+      $("login-screen").hidden = true;
+      $("app").hidden = false;
+      paintUser();
+      showView("overview");
+      refresh();
     }
-    document.querySelector("#login-form").addEventListener("submit", async (event) => {
+    $("login-form").addEventListener("submit", function (event) {
       event.preventDefault();
-      const form = new FormData(event.target);
-      try {
-        const response = await fetch("/api/v1/auth/login", {
-          method: "POST", headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ username: form.get("username"), password: form.get("password") })
+      var form = new FormData(event.target);
+      var error = $("login-error");
+      error.style.display = "none";
+      fetch("/api/v1/auth/login", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ username: form.get("username"), password: form.get("password") }) }).then(function (response) {
+        return response.json().then(function (data) {
+          if (!response.ok) throw new Error(data.error || "\u767B\u5F55\u5931\u8D25");
+          signedIn(data);
         });
-        const data = await response.json();
-        if (!response.ok) throw new Error(data.error || "\u767B\u5F55\u5931\u8D25");
-        signedIn(data);
-        await refresh();
-      } catch (error) { showError(error); }
+      }).catch(function (err) { error.style.display = "block"; error.textContent = err.message || "\u767B\u5F55\u5931\u8D25"; });
     });
-    document.querySelector("#device-form").addEventListener("submit", async (event) => {
+    $("nav").addEventListener("click", function (event) {
+      var button = event.target.closest("button");
+      if (button && button.getAttribute("data-view")) showView(button.getAttribute("data-view"));
+    });
+    document.body.addEventListener("click", function (event) {
+      var jump = event.target.closest("[data-jump]");
+      if (jump) showView(jump.getAttribute("data-jump"));
+    });
+    $("menu").addEventListener("click", function () { $("sidebar").classList.toggle("open"); $("backdrop").classList.toggle("show"); });
+    $("backdrop").addEventListener("click", function () { $("sidebar").classList.remove("open"); $("backdrop").classList.remove("show"); });
+    $("refresh").addEventListener("click", refresh);
+    $("user-btn").addEventListener("click", function () { $("user-menu").hidden = !$("user-menu").hidden; });
+    $("logout").addEventListener("click", logout);
+    $("series-type").addEventListener("change", function () { state.seriesTouched = true; state.seriesType = $("series-type").value; refresh(); });
+    $("range").addEventListener("click", function (event) {
+      var button = event.target.closest("button");
+      if (!button) return;
+      state.range = button.getAttribute("data-range");
+      $("range").querySelectorAll("button").forEach(function (item) { item.classList.toggle("on", item === button); });
+      renderChart();
+    });
+    ["filter-type", "filter-device", "filter-range"].forEach(function (id) { $(id).addEventListener("change", function () { state.page = 1; renderRecords(); }); });
+    $("prev").addEventListener("click", function () { if (state.page > 1) { state.page--; renderRecords(); } });
+    $("next").addEventListener("click", function () { state.page++; renderRecords(); });
+    $("drawer-close").addEventListener("click", function () { $("drawer").hidden = true; });
+    $("drawer").addEventListener("click", function (event) { if (event.target === $("drawer")) $("drawer").hidden = true; });
+    $("device-form").addEventListener("submit", function (event) {
       event.preventDefault();
-      const form = new FormData(event.target);
-      try {
-        await api("/api/v1/admin/devices", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ device_id: form.get("device_id"), name: form.get("name") })
-        });
-        document.querySelector("#pair-form").elements.device_id.value = form.get("device_id");
-        await refresh();
-      } catch (error) { showError(error); }
+      var form = new FormData(event.target);
+      api("/api/v1/admin/devices", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ device_id: form.get("device_id"), name: form.get("name") }) }).then(function () {
+        $("pair-form").elements.device_id.value = form.get("device_id");
+        refresh();
+      }).catch(showError);
     });
-    document.querySelector("#pair-form").addEventListener("submit", async (event) => {
+    $("pair-form").addEventListener("submit", function (event) {
       event.preventDefault();
-      const form = new FormData(event.target);
-      const deviceID = String(form.get("device_id") || "");
-      try {
-        const data = await api("/api/v1/admin/devices/" + encodeURIComponent(deviceID) + "/pairing-codes", { method: "POST" });
-        document.querySelector("#pair-code").textContent = data.code;
-        document.querySelector("#pair-note").textContent = "\u91C7\u96C6\u7AEF " + data.device_id + " \xB7 10 \u5206\u949F\u5185\u6709\u6548 \xB7 \u53EA\u80FD\u4F7F\u7528\u4E00\u6B21";
-      } catch (error) { showError(error); }
+      var id = String(new FormData(event.target).get("device_id") || "");
+      api("/api/v1/admin/devices/" + encodeURIComponent(id) + "/pairing-codes", { method: "POST" }).then(function (data) {
+        $("pair-code").textContent = data.code;
+        $("pair-note").textContent = "\u91C7\u96C6\u7AEF " + data.device_id + " \xB7 10 \u5206\u949F\u5185\u6709\u6548 \xB7 \u53EA\u80FD\u4F7F\u7528\u4E00\u6B21";
+      }).catch(showError);
     });
-    document.querySelector("#logout").addEventListener("click", logout);
-    document.querySelector("#refresh").addEventListener("click", () => refresh().catch(showError));
-    document.querySelector("#series-type").addEventListener("change", () => drawSeries().catch(showError));
-    document.querySelector("#csv").addEventListener("click", () => download("/api/v1/exports/events.csv", "events.csv"));
-    document.querySelector("#json").addEventListener("click", () => download("/api/v1/exports/events.json", "events.json"));
-    document.querySelector("#recon").addEventListener("click", () => download("/api/v1/exports/reconciliation.json", "reconciliation.json"));
-    document.querySelector("#rq1").addEventListener("click", () => download("/api/v1/exports/rq1.json", "rq1.json"));
-    document.querySelector("#rq2").addEventListener("click", () => download("/api/v1/exports/rq2.json", "rq2.json"));
-    document.querySelector("#rq3").addEventListener("click", () => download("/api/v1/exports/rq3.json", "rq3.json"));
-    document.querySelector("#rq4").addEventListener("click", () => download("/api/v1/exports/rq4.json", "rq4.json"));
+    renderExports();
     if (token()) {
-      document.querySelector("#login").hidden = true;
-      document.querySelector("#app").hidden = false;
-      document.querySelector("#logout").hidden = false;
-      refresh().catch(showError);
+      state.token = token();
+      state.role = sessionStorage.getItem("bylw_role") || "";
+      state.username = sessionStorage.getItem("bylw_user") || "";
+      $("login-screen").hidden = true;
+      $("app").hidden = false;
+      paintUser();
+      refresh();
     }
   <\/script>
 </body>
