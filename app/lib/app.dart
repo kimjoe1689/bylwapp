@@ -19,6 +19,7 @@ class BylwApp extends StatelessWidget {
     this.study,
     this.prefs,
     this.devices,
+    this.autoRegister = false,
   });
 
   final HealthRepository repository;
@@ -28,6 +29,9 @@ class BylwApp extends StatelessWidget {
   final StudyBundle? study;
   final CollectorPrefs? prefs;
   final BleDeviceManager? devices;
+
+  /// Production turns this on. Tests leave it off so they do not call the network.
+  final bool autoRegister;
 
   @override
   Widget build(BuildContext context) {
@@ -44,6 +48,7 @@ class BylwApp extends StatelessWidget {
         study: study,
         prefs: prefs,
         devices: devices,
+        autoRegister: autoRegister,
       ),
     );
   }

@@ -22,6 +22,7 @@ class HomeDashboard extends StatefulWidget {
     this.devices,
     this.onOpenReminders,
     this.onOpenDevice,
+    this.syncTick = 0,
   });
 
   final List<LocalRecord> records;
@@ -34,6 +35,7 @@ class HomeDashboard extends StatefulWidget {
   final BleDeviceManager? devices;
   final VoidCallback? onOpenReminders;
   final void Function(String kind)? onOpenDevice;
+  final int syncTick;
 
   @override
   State<HomeDashboard> createState() => _HomeDashboardState();
@@ -42,12 +44,22 @@ class HomeDashboard extends StatefulWidget {
 class _HomeDashboardState extends State<HomeDashboard> {
   int _pending = 0;
   String? _lastSync;
+  String? _failure;
+  bool _serverOk = false;
   bool _syncing = false;
 
   @override
   void initState() {
     super.initState();
     _loadPending();
+  }
+
+  @override
+  void didUpdateWidget(HomeDashboard oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (widget.syncTick != oldWidget.syncTick) {
+      _sync(quiet: true);
+    }
   }
 
   Future<void> _loadPending() async {
@@ -58,25 +70,56 @@ class _HomeDashboardState extends State<HomeDashboard> {
     }
     final rows = await study.journal.pending();
     final syncedAt = await study.journal.latestSyncedAt();
+    String? failure;
+    for (final row in rows) {
+      if (row.lastError.isNotEmpty) {
+        failure = row.lastError;
+        break;
+      }
+    }
+    var serverOk = false;
+    final token = widget.prefs?.deviceToken ?? '';
+    if (token.isNotEmpty && !widget.demo) {
+      try {
+        final base = await widget.settings.getServerBaseUrl();
+        final client =
+            (widget.clientFactory ?? (value) => ServerClient(baseUrl: value))(
+              base,
+            );
+        await client.checkHealth();
+        serverOk = true;
+      } catch (error) {
+        failure ??= '$error';
+      }
+    }
     if (mounted) {
       setState(() {
         _pending = rows.length;
         _lastSync = syncedAt;
+        _failure = failure;
+        _serverOk = serverOk;
       });
     }
   }
 
-  Future<void> _sync() async {
+  Future<void> _sync({bool quiet = false}) async {
     final study = widget.study;
     final prefs = widget.prefs;
     if (widget.demo) {
-      _snack('演示数据只在屏幕上，不会同步');
+      if (!quiet) _snack('演示数据只在屏幕上，不会同步');
       return;
     }
     if (study == null || prefs == null || prefs.deviceToken.isEmpty) {
-      _snack('请先在「我的」里填写设备令牌');
+      if (!quiet) {
+        _snack(
+          prefs?.registerError.isNotEmpty == true
+              ? '还没连上服务器：${prefs!.registerError}'
+              : '正在连接服务器',
+        );
+      }
       return;
     }
+    if (quiet && !prefs.autoSync) return;
     setState(() => _syncing = true);
     final base = await widget.settings.getServerBaseUrl();
     final worker = SyncWorker(
@@ -89,10 +132,16 @@ class _HomeDashboardState extends State<HomeDashboard> {
         clockSkew: prefs.faultClockSkew,
       ),
     );
-    final count = await worker.syncOnce();
-    await _loadPending();
-    if (mounted) setState(() => _syncing = false);
-    _snack('本轮同步完成 $count 条');
+    try {
+      final count = await worker.syncOnce();
+      await _loadPending();
+      if (!quiet && mounted) _snack('本轮同步完成 $count 条');
+    } catch (error) {
+      if (mounted) setState(() => _failure = '$error');
+      if (!quiet) _snack('同步失败：$error');
+    } finally {
+      if (mounted) setState(() => _syncing = false);
+    }
   }
 
   void _snack(String message) {
@@ -138,6 +187,13 @@ class _HomeDashboardState extends State<HomeDashboard> {
         _SyncBar(
           pending: widget.demo ? 0 : _pending,
           lastSync: widget.demo ? null : _lastSync,
+          paired: widget.prefs?.deviceToken.isNotEmpty == true,
+          serverOk: _serverOk,
+          failure:
+              _failure ??
+              (widget.prefs?.deviceToken.isNotEmpty == true
+                  ? null
+                  : widget.prefs?.registerError),
           syncing: _syncing,
           onSync: _sync,
         ),
@@ -354,22 +410,39 @@ class _SyncBar extends StatelessWidget {
   const _SyncBar({
     required this.pending,
     required this.lastSync,
+    required this.paired,
+    required this.serverOk,
+    required this.failure,
     required this.syncing,
     required this.onSync,
   });
 
   final int pending;
   final String? lastSync;
+  final bool paired;
+  final bool serverOk;
+  final String? failure;
   final bool syncing;
   final VoidCallback onSync;
 
   @override
   Widget build(BuildContext context) {
+    final title = !paired
+        ? '正在连接服务器'
+        : serverOk
+        ? '已连接服务器'
+        : '服务器未连通';
+    final detail = [
+      pending == 0 ? '没有待上传' : '待上传 $pending 条',
+      _syncLabel(lastSync),
+      if (failure != null && failure!.isNotEmpty) failure!,
+    ].join('\n');
     return Card(
       child: ListTile(
         leading: const Icon(Icons.cloud_upload_outlined),
-        title: Text(pending == 0 ? '没有待上传' : '待上传 $pending 条'),
-        subtitle: Text(_syncLabel(lastSync)),
+        title: Text(title),
+        subtitle: Text(detail),
+        isThreeLine: failure != null && failure!.isNotEmpty,
         trailing: FilledButton.tonal(
           onPressed: syncing ? null : onSync,
           child: Text(syncing ? '同步中' : '同步'),

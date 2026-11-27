@@ -2,6 +2,9 @@ import 'dart:async';
 
 import 'package:material_ui/material_ui.dart';
 
+import 'dart:math';
+
+import 'package:bylwapp/api/device_register.dart';
 import 'package:bylwapp/api/server_client.dart';
 import 'package:bylwapp/ble/ble_client.dart';
 import 'package:bylwapp/ble/device_manager.dart';
@@ -29,6 +32,7 @@ class AppShell extends StatefulWidget {
     this.study,
     this.prefs,
     this.devices,
+    this.autoRegister = false,
   });
 
   final HealthRepository repository;
@@ -38,6 +42,7 @@ class AppShell extends StatefulWidget {
   final StudyBundle? study;
   final CollectorPrefs? prefs;
   final BleDeviceManager? devices;
+  final bool autoRegister;
 
   @override
   State<AppShell> createState() => _AppShellState();
@@ -45,9 +50,11 @@ class AppShell extends StatefulWidget {
 
 class _AppShellState extends State<AppShell> {
   int _index = 0;
+  int _syncTick = 0;
   List<LocalRecord> _records = const [];
   late final BleDeviceManager _devices = widget.devices ?? BleDeviceManager();
   StreamSubscription<BleLink>? _links;
+  Timer? _syncTimer;
 
   @override
   void initState() {
@@ -55,10 +62,58 @@ class _AppShellState extends State<AppShell> {
     _devices.addListener(_onDevices);
     _links = widget.ble.links.listen(_devices.applyLink);
     _reload();
+    if (widget.autoRegister) {
+      _bootSync();
+      _syncTimer = Timer.periodic(const Duration(seconds: 45), (_) {
+        _bootSync();
+      });
+    }
+  }
+
+  Future<void> _bootSync() async {
+    await _ensureRegistered();
+    final prefs = widget.prefs;
+    if (prefs == null || !prefs.autoSync || prefs.deviceToken.isEmpty) {
+      return;
+    }
+    if (mounted) setState(() => _syncTick++);
+  }
+
+  bool _registering = false;
+
+  Future<void> _ensureRegistered() async {
+    final prefs = widget.prefs;
+    if (prefs == null || prefs.deviceToken.isNotEmpty || _registering) {
+      return;
+    }
+    _registering = true;
+    try {
+      if (prefs.collectorId.isEmpty || prefs.collectorId == 'phone-1') {
+        prefs.collectorId = _freshDeviceId();
+      }
+      final base = await widget.settings.getServerBaseUrl();
+      final result = await registerDevice(
+        baseUrl: base,
+        deviceId: prefs.collectorId,
+      );
+      await widget.settings.setDeviceCredential(
+        token: result.token,
+        deviceId: result.deviceId,
+      );
+      prefs.deviceToken = result.token;
+      prefs.collectorId = result.deviceId;
+      prefs.registerError = '';
+    } catch (error) {
+      prefs.registerError = '$error';
+      if (mounted) setState(() {});
+    } finally {
+      _registering = false;
+    }
   }
 
   @override
   void dispose() {
+    _syncTimer?.cancel();
     _links?.cancel();
     _devices.removeListener(_onDevices);
     if (widget.devices == null) {
@@ -91,6 +146,7 @@ class _AppShellState extends State<AppShell> {
         prefs: widget.prefs,
         settings: widget.settings,
         clientFactory: widget.clientFactory,
+        syncTick: _syncTick,
         onChanged: () => setState(() {}),
         devices: _devices,
         onOpenReminders: () => setState(() => _index = 2),
@@ -241,6 +297,12 @@ class _AppShellState extends State<AppShell> {
     );
     await _reload();
   }
+}
+
+String _freshDeviceId() {
+  final clock = DateTime.now().microsecondsSinceEpoch.toRadixString(16);
+  final salt = Random().nextInt(1 << 32).toRadixString(16);
+  return 'phone-$clock$salt';
 }
 
 class _NeedStudy extends StatelessWidget {

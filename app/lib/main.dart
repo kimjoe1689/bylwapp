@@ -20,7 +20,10 @@ Future<void> main() async {
   final repository = await SqliteHealthRepository.open();
   final settings = await SharedPreferencesSettingsStore.open();
   final journal = await JournalStore.open();
-  final prefs = CollectorPrefs();
+  final prefs = CollectorPrefs(
+    deviceToken: await settings.getDeviceToken(),
+    collectorId: await settings.getCollectorId(),
+  );
   final study = StudyBundle(
     journal: journal,
     prefs: prefs,
@@ -34,6 +37,7 @@ Future<void> main() async {
       ble: FlutterBlueSession(),
       study: study,
       prefs: prefs,
+      autoRegister: true,
     ),
   );
 }

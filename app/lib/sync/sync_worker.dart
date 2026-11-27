@@ -43,6 +43,7 @@ class SyncWorker {
             record.event.eventId,
             state: 'synced',
             attempts: attempts,
+            serverReceivedAt: DateTime.now().toUtc().toIso8601String(),
           );
           synced++;
         } else if (result == 'conflict') {
@@ -67,6 +68,7 @@ class SyncWorker {
             record.event.eventId,
             state: 'synced',
             attempts: attempts,
+            serverReceivedAt: DateTime.now().toUtc().toIso8601String(),
           );
           synced++;
           continue;

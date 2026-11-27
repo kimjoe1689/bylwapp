@@ -18,7 +18,10 @@ void main() {
       baseUrl: 'https://bylw-api.zzjteacher.com/',
       code: ' 123456 ',
       client: MockClient((request) async {
-        expect(request.url, Uri.parse('https://bylw-api.zzjteacher.com/api/v1/devices/pair'));
+        expect(
+          request.url,
+          Uri.parse('https://bylw-api.zzjteacher.com/api/v1/devices/pair'),
+        );
         expect(request.headers['Content-Type'], 'application/json');
         expect(jsonDecode(request.body), {'code': '123456'});
         return http.Response(

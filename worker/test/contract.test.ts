@@ -70,6 +70,26 @@ beforeEach(async () => {
 });
 
 describe("Go API contract", () => {
+  it("registers a collector without a login and accepts its upload", async () => {
+    const registered = await call("POST", "/api/v1/devices/register", {
+      device_id: "phone-auto-1",
+      name: "bylwapp",
+    });
+    expect(registered.status, registered.text).toBe(201);
+    const issued = registered.json as { token: string; device_id: string };
+    expect(issued.device_id).toBe("phone-auto-1");
+    expect(issued.token.length).toBeGreaterThan(16);
+    const event = sample({ device_id: "phone-auto-1", event_id: "evt-auto" });
+    const hashed = await payloadHash(event);
+    const stored = await call(
+      "POST",
+      "/api/v1/devices/phone-auto-1/events",
+      { event, payload_hash: hashed.hash },
+      issued.token,
+    );
+    expect(stored.status, stored.text).toBe(201);
+  });
+
   it("answers health, CORS, and the admin page", async () => {
     const health = await call("GET", "/health");
     expect(health.status).toBe(200);

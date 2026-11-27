@@ -158,6 +158,19 @@ export async function upsertDevice(db: D1Database, id: string, name: string): Pr
     .run();
 }
 
+export async function registerDevice(
+  db: D1Database,
+  deviceID: string,
+  name: string,
+): Promise<{ token: string; device_id: string }> {
+  await upsertDevice(db, deviceID, name);
+  const token = await issueDeviceToken(db, deviceID);
+  if (!token) {
+    throw new Error("token failed");
+  }
+  return { token, device_id: deviceID };
+}
+
 export async function issueDeviceToken(db: D1Database, deviceID: string): Promise<string | null> {
   const row = await db.prepare("SELECT COUNT(1) AS n FROM devices WHERE device_id = ?").bind(deviceID).first<{ n: number }>();
   if (num(row?.n) === 0) {

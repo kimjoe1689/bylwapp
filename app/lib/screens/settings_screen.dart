@@ -107,10 +107,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
           keyboardType: TextInputType.url,
         ),
         const SizedBox(height: 8),
-        const Text(
-          '手机请填写电脑的局域网地址，例如 http://192.168.1.20:8080。电脑上的服务要用 0.0.0.0:8080 监听。',
-        ),
-        const SizedBox(height: 12),
+        const Text('安装后会自动连上默认服务器。需要改地址时，保存新的 http 或 https 地址即可。'),
+        const SizedBox(height: 16),
         if (widget.prefs != null) ...[
           SwitchListTile(
             title: const Text('大字高对比'),

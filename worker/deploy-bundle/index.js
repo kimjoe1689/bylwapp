@@ -2966,6 +2966,15 @@ async function upsertDevice(db, id, name) {
   ).bind(id, name, nowNano()).run();
 }
 __name(upsertDevice, "upsertDevice");
+async function registerDevice(db, deviceID, name) {
+  await upsertDevice(db, deviceID, name);
+  const token2 = await issueDeviceToken(db, deviceID);
+  if (!token2) {
+    throw new Error("token failed");
+  }
+  return { token: token2, device_id: deviceID };
+}
+__name(registerDevice, "registerDevice");
 async function issueDeviceToken(db, deviceID) {
   const row = await db.prepare("SELECT COUNT(1) AS n FROM devices WHERE device_id = ?").bind(deviceID).first();
   if (num(row?.n) === 0) {
@@ -3360,6 +3369,26 @@ app.post("/api/v1/auth/login", async (c) => {
     return json(401, { error: "invalid credentials" });
   }
   return json(200, { token: session.token, role: session.user.role, username: session.user.username });
+});
+app.post("/api/v1/devices/register", async (c) => {
+  const body = await readJSON(c.req.raw);
+  if (!body.ok) {
+    return json(400, { error: "invalid JSON" });
+  }
+  const requested = typeof body.value.device_id === "string" ? body.value.device_id.trim() : "";
+  const deviceID = requested === "" ? `phone-${crypto.randomUUID().replaceAll("-", "")}` : requested;
+  if (!/^[A-Za-z0-9._-]{1,128}$/.test(deviceID)) {
+    return json(400, { error: "device_id must be a path-safe token" });
+  }
+  const nameRaw = typeof body.value.name === "string" ? body.value.name.trim() : "";
+  const name = nameRaw === "" ? "bylwapp" : nameRaw.slice(0, 80);
+  try {
+    const issued = await registerDevice(c.env.DB, deviceID, name);
+    return json(201, { token: issued.token, device_id: issued.device_id, note: TOKEN_NOTE });
+  } catch (err) {
+    console.log(JSON.stringify({ level: "error", msg: "register failed", err: String(err) }));
+    return json(500, { error: "register failed" });
+  }
 });
 app.post("/api/v1/devices/pair", async (c) => {
   const body = await readJSON(c.req.raw);

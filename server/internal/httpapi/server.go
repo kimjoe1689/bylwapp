@@ -2,7 +2,9 @@ package httpapi
 
 import (
 	"context"
+	"crypto/rand"
 	"encoding/csv"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"io"
@@ -34,6 +36,7 @@ func New(st *store.Store, staleAfter time.Duration) http.Handler {
 	r.Get("/health", h.health)
 	r.Get("/", web.Handler())
 	r.Post("/api/v1/auth/login", h.login)
+	r.Post("/api/v1/devices/register", h.registerDevice)
 	r.Post("/api/v1/devices/{device_id}/events", h.ingest)
 	r.Get("/api/v1/devices/{device_id}/events/{event_id}", h.readBack)
 
@@ -68,6 +71,71 @@ type handler struct {
 type principal struct {
 	role     string
 	deviceID string
+}
+
+func (h *handler) registerDevice(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		DeviceID string `json:"device_id"`
+		Name     string `json:"name"`
+	}
+	if r.Body != nil {
+		dec := json.NewDecoder(io.LimitReader(r.Body, 1<<20))
+		if err := dec.Decode(&body); err != nil && !errors.Is(err, io.EOF) {
+			writeError(w, http.StatusBadRequest, "invalid JSON")
+			return
+		}
+	}
+	id := strings.TrimSpace(body.DeviceID)
+	if id == "" {
+		id = "phone-" + strings.ReplaceAll(newID(), "-", "")
+	}
+	if !pathToken(id) {
+		writeError(w, http.StatusBadRequest, "device_id must be a path-safe token")
+		return
+	}
+	name := strings.TrimSpace(body.Name)
+	if name == "" {
+		name = "bylwapp"
+	}
+	if len(name) > 80 {
+		name = name[:80]
+	}
+	if err := h.store.UpsertDevice(r.Context(), id, name); err != nil {
+		writeError(w, http.StatusInternalServerError, "register failed")
+		return
+	}
+	token, err := h.store.IssueDeviceToken(r.Context(), id)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "register failed")
+		return
+	}
+	writeJSON(w, http.StatusCreated, map[string]string{
+		"token":     token,
+		"device_id": id,
+		"note":      "Store this token on the collector. It is not shown again.",
+	})
+}
+
+func pathToken(value string) bool {
+	if len(value) < 1 || len(value) > 128 {
+		return false
+	}
+	for _, r := range value {
+		switch {
+		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9', r == '.' || r == '_' || r == '-':
+		default:
+			return false
+		}
+	}
+	return true
+}
+
+func newID() string {
+	buf := make([]byte, 8)
+	if _, err := rand.Read(buf); err != nil {
+		return strings.ReplaceAll(time.Now().UTC().Format("20060102150405.000000000"), ".", "")
+	}
+	return hex.EncodeToString(buf)
 }
 
 func (h *handler) health(w http.ResponseWriter, r *http.Request) {
