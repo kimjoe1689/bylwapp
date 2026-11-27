@@ -1,7 +1,11 @@
+import 'dart:async';
+
 import 'package:material_ui/material_ui.dart';
 
 import 'package:bylwapp/api/server_client.dart';
 import 'package:bylwapp/ble/ble_client.dart';
+import 'package:bylwapp/ble/device_manager.dart';
+import 'package:bylwapp/ble/driver_registry.dart';
 import 'package:bylwapp/data/health_repository.dart';
 import 'package:bylwapp/journal/canonical_event.dart';
 import 'package:bylwapp/models/health_record.dart';
@@ -24,6 +28,7 @@ class AppShell extends StatefulWidget {
     this.clientFactory,
     this.study,
     this.prefs,
+    this.devices,
   });
 
   final HealthRepository repository;
@@ -32,6 +37,7 @@ class AppShell extends StatefulWidget {
   final ServerClient Function(String baseUrl)? clientFactory;
   final StudyBundle? study;
   final CollectorPrefs? prefs;
+  final BleDeviceManager? devices;
 
   @override
   State<AppShell> createState() => _AppShellState();
@@ -40,11 +46,29 @@ class AppShell extends StatefulWidget {
 class _AppShellState extends State<AppShell> {
   int _index = 0;
   List<LocalRecord> _records = const [];
+  late final BleDeviceManager _devices = widget.devices ?? BleDeviceManager();
+  StreamSubscription<BleLink>? _links;
 
   @override
   void initState() {
     super.initState();
+    _devices.addListener(_onDevices);
+    _links = widget.ble.links.listen(_devices.applyLink);
     _reload();
+  }
+
+  @override
+  void dispose() {
+    _links?.cancel();
+    _devices.removeListener(_onDevices);
+    if (widget.devices == null) {
+      _devices.dispose();
+    }
+    super.dispose();
+  }
+
+  void _onDevices() {
+    if (mounted) setState(() {});
   }
 
   Future<void> _reload() async {
@@ -68,12 +92,14 @@ class _AppShellState extends State<AppShell> {
         settings: widget.settings,
         clientFactory: widget.clientFactory,
         onChanged: () => setState(() {}),
+        devices: _devices,
       ),
       ScanScreen(
         repository: widget.repository,
         ble: widget.ble,
         embedded: true,
-        onJournal: _journalMeasurement,
+        devices: _devices,
+        onReading: _onReading,
       ),
       widget.study == null
           ? const _NeedStudy(text: '提醒需要本地日志。从正常启动进入后即可使用。')
@@ -131,6 +157,32 @@ class _AppShellState extends State<AppShell> {
         ],
       ),
     );
+  }
+
+  Future<void> _onReading(HealthMeasurement measurement, BleScanHit hit) async {
+    final kind = driverById(hit.driverId)?.kind ?? measurement.type;
+    _devices.addReading(kind, hit.address, measurement);
+    if (widget.prefs?.showDemo == true) {
+      return;
+    }
+    if (!_devices.gate.shouldPersist(
+      '${hit.address}|${measurement.type}',
+      DateTime.now(),
+    )) {
+      return;
+    }
+    final driver = driverById(hit.driverId);
+    await widget.repository.upsertDevice(
+      HealthDevice(
+        name: hit.name,
+        kind: kind,
+        address: hit.address,
+        model: driver?.targetModel ?? hit.name,
+      ),
+    );
+    await widget.repository.insertMeasurement(hit.address, measurement);
+    await _journalMeasurement(measurement, hit);
+    await _reload();
   }
 
   Future<void> _journalMeasurement(

@@ -2,6 +2,7 @@ import 'package:material_ui/material_ui.dart';
 
 import 'package:bylwapp/api/server_client.dart';
 import 'package:bylwapp/ble/ble_client.dart';
+import 'package:bylwapp/ble/device_manager.dart';
 import 'package:bylwapp/data/health_repository.dart';
 import 'package:bylwapp/screens/study_screens.dart';
 import 'package:bylwapp/settings/settings_store.dart';
@@ -17,6 +18,7 @@ class BylwApp extends StatelessWidget {
     this.clientFactory,
     this.study,
     this.prefs,
+    this.devices,
   });
 
   final HealthRepository repository;
@@ -25,6 +27,7 @@ class BylwApp extends StatelessWidget {
   final ServerClient Function(String baseUrl)? clientFactory;
   final StudyBundle? study;
   final CollectorPrefs? prefs;
+  final BleDeviceManager? devices;
 
   @override
   Widget build(BuildContext context) {
@@ -40,6 +43,7 @@ class BylwApp extends StatelessWidget {
         clientFactory: clientFactory,
         study: study,
         prefs: prefs,
+        devices: devices,
       ),
     );
   }

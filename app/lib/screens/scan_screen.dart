@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:material_ui/material_ui.dart';
 
 import 'package:bylwapp/ble/ble_client.dart';
+import 'package:bylwapp/ble/device_manager.dart';
 import 'package:bylwapp/ble/driver_registry.dart';
 import 'package:bylwapp/ble/ring/ring_sync.dart';
 import 'package:bylwapp/data/health_repository.dart';
@@ -14,15 +15,17 @@ class ScanScreen extends StatefulWidget {
     super.key,
     required this.repository,
     required this.ble,
-    this.onJournal,
+    this.onReading,
     this.embedded = false,
+    this.devices,
   });
 
   final HealthRepository repository;
   final BleClient ble;
   final Future<void> Function(HealthMeasurement measurement, BleScanHit hit)?
-  onJournal;
+  onReading;
   final bool embedded;
+  final BleDeviceManager? devices;
 
   @override
   State<ScanScreen> createState() => _ScanScreenState();
@@ -37,7 +40,6 @@ class _ScanScreenState extends State<ScanScreen>
     duration: const Duration(seconds: 2),
   );
   bool _scanning = false;
-  BleScanHit? _connected;
   bool _busy = false;
 
   @override
@@ -82,12 +84,20 @@ class _ScanScreenState extends State<ScanScreen>
       _message('这台设备不在支持的三种协议里');
       return;
     }
+    if (widget.devices?.isConnectedTo(hit.address) == true) {
+      await _openDetail(hit);
+      return;
+    }
     setState(() => _busy = true);
     try {
       await widget.ble.stopScan();
       await widget.ble.connect(
         hit: hit,
         onMeasurement: (measurement) async {
+          if (widget.onReading != null) {
+            await widget.onReading!(measurement, hit);
+            return;
+          }
           await widget.repository.upsertDevice(
             HealthDevice(
               name: hit.name,
@@ -97,14 +107,10 @@ class _ScanScreenState extends State<ScanScreen>
             ),
           );
           await widget.repository.insertMeasurement(hit.address, measurement);
-          await widget.onJournal?.call(measurement, hit);
         },
       );
       if (mounted) {
-        setState(() {
-          _scanning = false;
-          _connected = hit;
-        });
+        setState(() => _scanning = false);
       }
       _message('已连接 ${hit.name}');
     } catch (error) {
@@ -117,7 +123,9 @@ class _ScanScreenState extends State<ScanScreen>
   }
 
   Future<void> _sync() async {
-    final hit = _connected;
+    final hit = widget.devices?.phase == BleLinkPhase.connected
+        ? widget.devices?.device
+        : null;
     final driver = driverById(hit?.driverId);
     if (hit == null || driver == null) {
       return;
@@ -139,6 +147,26 @@ class _ScanScreenState extends State<ScanScreen>
     }
   }
 
+  Future<void> _openDetail(BleScanHit hit) async {
+    final all = await widget.repository.listRecent();
+    final mine = all
+        .where((record) => record.device.address == hit.address)
+        .toList();
+    if (!mounted) {
+      return;
+    }
+    await Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder: (context) => DeviceDetailScreen(
+          title: hit.name,
+          address: hit.address,
+          records: mine,
+          devices: widget.devices,
+        ),
+      ),
+    );
+  }
+
   void _message(String text) {
     if (!mounted) {
       return;
@@ -148,7 +176,10 @@ class _ScanScreenState extends State<ScanScreen>
 
   @override
   Widget build(BuildContext context) {
-    final connected = _connected;
+    final devices = widget.devices;
+    final connected = devices?.phase == BleLinkPhase.connected
+        ? devices?.device
+        : null;
     final temperature =
         connected != null && ringNameSupportsTemperature(connected.name);
     final content = ListView(
@@ -173,9 +204,11 @@ class _ScanScreenState extends State<ScanScreen>
           onPressed: _busy ? null : _toggleScan,
           child: Text(_scanning ? '停止扫描' : '开始扫描'),
         ),
-        if (connected != null) ...[
+        if (devices?.device != null) ...[
           const SizedBox(height: 12),
-          Text('已连接 ${connected.name}'),
+          Text('${_phaseText(devices!.phase)} ${devices.device!.name}'),
+        ],
+        if (connected != null) ...[
           OutlinedButton(
             onPressed: _busy ? null : _sync,
             child: const Text('读取设备历史'),
@@ -202,22 +235,14 @@ class _ScanScreenState extends State<ScanScreen>
                 trailing: FilledButton.tonal(
                   onPressed: _busy || hit.driverId == null
                       ? null
-                      : () => _connect(hit),
-                  child: const Text('连接'),
+                      : () => devices?.isConnectedTo(hit.address) == true
+                            ? _openDetail(hit)
+                            : _connect(hit),
+                  child: Text(
+                    devices?.isConnectedTo(hit.address) == true ? '已连接' : '连接',
+                  ),
                 ),
-                onTap: () async {
-                  final all = await widget.repository.listRecent();
-                  final mine = all
-                      .where((record) => record.device.address == hit.address)
-                      .toList();
-                  if (!context.mounted) return;
-                  await Navigator.of(context).push(
-                    MaterialPageRoute<void>(
-                      builder: (context) =>
-                          DeviceDetailScreen(title: hit.name, records: mine),
-                    ),
-                  );
-                },
+                onTap: () => _openDetail(hit),
               ),
             ),
       ],
@@ -227,5 +252,16 @@ class _ScanScreenState extends State<ScanScreen>
       appBar: AppBar(title: const Text('设备')),
       body: content,
     );
+  }
+}
+
+String _phaseText(BleLinkPhase phase) {
+  switch (phase) {
+    case BleLinkPhase.connecting:
+      return '连接中';
+    case BleLinkPhase.connected:
+      return '已连接';
+    case BleLinkPhase.disconnected:
+      return '已断开';
   }
 }

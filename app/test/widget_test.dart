@@ -38,7 +38,7 @@ void main() {
     );
     await tester.pumpAndSettle();
 
-    expect(find.textContaining('120/80'), findsOneWidget);
+    expect(find.textContaining('120/80'), findsWidgets);
     expect(find.textContaining('YE680B'), findsOneWidget);
   });
 

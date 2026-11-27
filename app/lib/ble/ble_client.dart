@@ -33,10 +33,23 @@ class BleScanHit {
   final String? driverId;
 }
 
+enum BleLinkPhase { disconnected, connecting, connected }
+
+class BleLink {
+  const BleLink({required this.phase, this.address, this.name, this.driverId});
+
+  final BleLinkPhase phase;
+  final String? address;
+  final String? name;
+  final String? driverId;
+}
+
 abstract class BleClient {
   Stream<List<BleScanHit>> get scanHits;
 
   Stream<BleTrace> get traces;
+
+  Stream<BleLink> get links;
 
   Future<void> startScan();
 
@@ -62,12 +75,17 @@ class FakeBleClient implements BleClient {
       StreamController<List<BleScanHit>>.broadcast();
   final StreamController<BleTrace> _traces =
       StreamController<BleTrace>.broadcast();
+  final StreamController<BleLink> _links =
+      StreamController<BleLink>.broadcast();
 
   @override
   Stream<List<BleScanHit>> get scanHits => _controller.stream;
 
   @override
   Stream<BleTrace> get traces => _traces.stream;
+
+  @override
+  Stream<BleLink> get links => _links.stream;
 
   @override
   Future<void> startScan() async {

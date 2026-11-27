@@ -55,7 +55,7 @@ class _DebugScreenState extends State<DebugScreen> {
       body: ListView(
         padding: const EdgeInsets.all(16),
         children: [
-          const Text('这里显示每个特征的原始收发字节，方便真机对接。没有硬件时列表为空。'),
+          const Text('这里显示每个特征的原始收发字节。release 包同时写 logcat，过滤标签 BYLW。'),
           if (prefs != null) ...[
             TextField(
               controller: _id,

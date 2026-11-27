@@ -8,6 +8,7 @@ class HeartRateReading {
     required this.sensorContact,
     this.energyExpendedKj,
     this.rrIntervalsMs = const [],
+    this.raw = '',
   });
 
   final int bpm;
@@ -18,6 +19,8 @@ class HeartRateReading {
   final int? energyExpendedKj;
   final List<double> rrIntervalsMs;
 
+  final String raw;
+
   HealthMeasurement toMeasurement(DateTime recordedAt) {
     return HealthMeasurement(
       type: 'heart_rate',
@@ -27,6 +30,7 @@ class HeartRateReading {
         'bpm': bpm,
         'format': valueIsUint16 ? 'uint16' : 'uint8',
         'sensor_contact': sensorContact,
+        'raw': raw,
         if (energyExpendedKj != null) 'energy_expended_kj': energyExpendedKj,
         if (rrIntervalsMs.isNotEmpty) 'rr_intervals_ms': rrIntervalsMs,
       },
@@ -78,6 +82,7 @@ HeartRateReading parseHeartRate(List<int> data) {
     sensorContact: contact,
     energyExpendedKj: energy,
     rrIntervalsMs: rr,
+    raw: data.map((byte) => byte.toRadixString(16).padLeft(2, '0')).join(' '),
   );
 }
 

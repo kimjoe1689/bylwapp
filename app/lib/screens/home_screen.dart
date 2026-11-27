@@ -112,7 +112,7 @@ class _HomeScreenState extends State<HomeScreen> {
                   builder: (context) => ScanScreen(
                     repository: widget.repository,
                     ble: widget.ble,
-                    onJournal: _journalMeasurement,
+                    onReading: _journalMeasurement,
                   ),
                 ),
               );

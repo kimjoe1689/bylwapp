@@ -1,6 +1,7 @@
 import 'package:material_ui/material_ui.dart';
 
 import 'package:bylwapp/api/server_client.dart';
+import 'package:bylwapp/ble/device_manager.dart';
 import 'package:bylwapp/models/health_record.dart';
 import 'package:bylwapp/screens/study_screens.dart';
 import 'package:bylwapp/settings/settings_store.dart';
@@ -17,6 +18,7 @@ class HomeDashboard extends StatefulWidget {
     this.prefs,
     this.clientFactory,
     this.onChanged,
+    this.devices,
   });
 
   final List<LocalRecord> records;
@@ -26,6 +28,7 @@ class HomeDashboard extends StatefulWidget {
   final CollectorPrefs? prefs;
   final ServerClient Function(String baseUrl)? clientFactory;
   final VoidCallback? onChanged;
+  final BleDeviceManager? devices;
 
   @override
   State<HomeDashboard> createState() => _HomeDashboardState();
@@ -134,7 +137,9 @@ class _HomeDashboardState extends State<HomeDashboard> {
               child: _DeviceCard(
                 title: '戒指 R09',
                 icon: Icons.circle_outlined,
+                kind: 'ring',
                 record: _latestKind('ring'),
+                devices: widget.demo ? null : widget.devices,
               ),
             ),
             const SizedBox(width: 8),
@@ -142,7 +147,9 @@ class _HomeDashboardState extends State<HomeDashboard> {
               child: _DeviceCard(
                 title: '心率带 H303',
                 icon: Icons.monitor_heart_outlined,
+                kind: 'heart_rate',
                 record: _latestKind('heart_rate'),
+                devices: widget.demo ? null : widget.devices,
               ),
             ),
             const SizedBox(width: 8),
@@ -150,7 +157,9 @@ class _HomeDashboardState extends State<HomeDashboard> {
               child: _DeviceCard(
                 title: '血压计 YE680B',
                 icon: Icons.bloodtype_outlined,
+                kind: 'blood_pressure',
                 record: _latestKind('blood_pressure'),
+                devices: widget.demo ? null : widget.devices,
               ),
             ),
           ],
@@ -219,11 +228,13 @@ class _HomeDashboardState extends State<HomeDashboard> {
       final rows = widget.records
           .where((record) => record.measurement.type == type)
           .toList();
-      if (rows.isEmpty) return null;
-      final latest = rows.first.measurement.values;
-      final series = rows.reversed
-          .map((record) => pick(record.measurement.values))
-          .toList();
+      final live = widget.demo ? null : widget.devices?.latestByType[type];
+      if (rows.isEmpty && live == null) return null;
+      final latest = live?.values ?? rows.first.measurement.values;
+      final series = [
+        ...rows.reversed.map((record) => pick(record.measurement.values)),
+        if (live != null) pick(live.values),
+      ];
       return SizedBox(
         width: 160,
         child: Card(
@@ -331,16 +342,37 @@ class _DeviceCard extends StatelessWidget {
   const _DeviceCard({
     required this.title,
     required this.icon,
+    required this.kind,
     required this.record,
+    required this.devices,
   });
 
   final String title;
   final IconData icon;
+  final String kind;
   final LocalRecord? record;
+  final BleDeviceManager? devices;
 
   @override
   Widget build(BuildContext context) {
-    final when = record?.measurement.recordedAt.toLocal();
+    final live = devices?.latestByKind[kind];
+    final measurement = live ?? record?.measurement;
+    final when = measurement?.recordedAt.toLocal();
+    final contact = measurement?.values['sensor_contact'];
+    final worn = switch (contact) {
+      'detected' => '已接触',
+      'not_detected' => '未接触',
+      _ => null,
+    };
+    final status =
+        devices?.phaseLabel(kind) ?? (record == null ? '未连接' : '有读数');
+    final reading = measurement == null
+        ? null
+        : measurement.type == 'heart_rate'
+        ? '${_num(_asDouble(measurement.values['bpm']))} bpm'
+        : measurement.type == 'blood_pressure'
+        ? '${_num(_asDouble(measurement.values['systolic']))}/${_num(_asDouble(measurement.values['diastolic']))}'
+        : summarize(measurement);
     return Card(
       child: Padding(
         padding: const EdgeInsets.all(10),
@@ -351,15 +383,24 @@ class _DeviceCard extends StatelessWidget {
             const SizedBox(height: 6),
             Text(title, maxLines: 2, overflow: TextOverflow.ellipsis),
             Text(
-              record == null ? '未连接' : '有读数',
+              status,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
               style: TextStyle(
                 color: Theme.of(context).colorScheme.primary,
                 fontSize: 12,
               ),
             ),
+            if (reading != null)
+              Text(
+                worn == null ? reading : '$reading · $worn',
+                maxLines: 2,
+                overflow: TextOverflow.ellipsis,
+                style: const TextStyle(fontSize: 12),
+              ),
             if (when != null)
               Text(
-                '${when.hour.toString().padLeft(2, '0')}:${when.minute.toString().padLeft(2, '0')}',
+                '${when.hour.toString().padLeft(2, '0')}:${when.minute.toString().padLeft(2, '0')}:${when.second.toString().padLeft(2, '0')}',
                 style: const TextStyle(fontSize: 12),
               ),
           ],

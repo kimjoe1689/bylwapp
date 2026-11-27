@@ -47,6 +47,34 @@ void main() {
     expect(combined.rrIntervalsMs.single, 500);
   });
 
+  test('keeps a worn flag without dropping the heart rate', () {
+    final detected = parseHeartRate(const [0x06, 0x48]);
+    expect(detected.bpm, 72);
+    expect(detected.sensorContact, 'detected');
+    expect(detected.raw, '06 48');
+
+    final loose = parseHeartRate(const [0x04, 0x48]);
+    expect(loose.bpm, 72);
+    expect(loose.sensorContact, 'not_detected');
+    expect(loose.toMeasurement(now).values['bpm'], 72);
+  });
+
+  test('keeps a zero heart rate and the raw packet', () {
+    final reading = parseHeartRate(const [0x00, 0x00]);
+    expect(reading.bpm, 0);
+    expect(reading.sensorContact, 'unsupported');
+    expect(reading.toMeasurement(now).values['raw'], '00 00');
+  });
+
+  test('reads an H303 notification with contact and RR intervals', () {
+    final reading = parseHeartRate(const [0x16, 0x48, 0x00, 0x04]);
+    expect(reading.bpm, 72);
+    expect(reading.valueIsUint16, isFalse);
+    expect(reading.sensorContact, 'detected');
+    expect(reading.rrIntervalsMs, [1000]);
+    expect(reading.raw, '16 48 00 04');
+  });
+
   test('rejects a truncated value', () {
     expect(() => parseHeartRate(const [0x01]), throwsFormatException);
   });
