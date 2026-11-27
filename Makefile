@@ -1,4 +1,4 @@
-.PHONY: server-test server-build server-run app-analyze app-test
+.PHONY: server-test server-build server-run app-analyze app-test worker-test
 
 server-test:
 	$(MAKE) -C server test
@@ -14,3 +14,6 @@ app-analyze:
 
 app-test:
 	cd app && flutter test
+
+worker-test:
+	cd worker && npm test
