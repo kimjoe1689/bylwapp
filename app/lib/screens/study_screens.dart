@@ -112,22 +112,23 @@ class _ReminderScreenState extends State<ReminderScreen> {
                 children: [
                   Text('添加提醒', style: Theme.of(context).textTheme.titleLarge),
                   const SizedBox(height: 16),
-                  SegmentedButton<String>(
-                    segments: const [
-                      ButtonSegment(
-                        value: 'MEDICATION',
-                        label: Text('服药'),
-                        icon: Icon(Icons.medication_outlined),
+                  Wrap(
+                    spacing: 12,
+                    runSpacing: 12,
+                    children: [
+                      ChoiceChip(
+                        label: const Text('服药'),
+                        avatar: const Icon(Icons.medication_outlined, size: 18),
+                        selected: kind == 'MEDICATION',
+                        onSelected: (_) => setSheet(() => kind = 'MEDICATION'),
                       ),
-                      ButtonSegment(
-                        value: 'HYDRATION',
-                        label: Text('喝水'),
-                        icon: Icon(Icons.water_drop_outlined),
+                      ChoiceChip(
+                        label: const Text('喝水'),
+                        avatar: const Icon(Icons.water_drop_outlined, size: 18),
+                        selected: kind == 'HYDRATION',
+                        onSelected: (_) => setSheet(() => kind = 'HYDRATION'),
                       ),
                     ],
-                    selected: {kind},
-                    onSelectionChanged: (value) =>
-                        setSheet(() => kind = value.first),
                   ),
                   const SizedBox(height: 16),
                   const Text('多久之后'),
@@ -254,44 +255,51 @@ class _ReminderScreenState extends State<ReminderScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final body = Stack(
+    final body = Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Column(
-          children: [
-            Padding(
-              padding: const EdgeInsets.fromLTRB(16, 8, 4, 0),
-              child: Row(
+        Padding(
+          padding: const EdgeInsets.fromLTRB(16, 16, 16, 8),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text('提醒', style: Theme.of(context).textTheme.headlineSmall),
+              const SizedBox(height: 8),
+              Text(
+                '服药和喝水先记在手机上。到点后确认，或标成错过、删失。',
+                style: TextStyle(
+                  color: Theme.of(context).colorScheme.onSurfaceVariant,
+                ),
+              ),
+              const SizedBox(height: 16),
+              Wrap(
+                spacing: 12,
+                runSpacing: 12,
                 children: [
-                  Text('提醒', style: Theme.of(context).textTheme.headlineSmall),
-                  const Spacer(),
-                  IconButton(
-                    tooltip: '检查到期',
+                  FilledButton.icon(
+                    onPressed: _openAdd,
+                    icon: const Icon(Icons.add),
+                    label: const Text('添加提醒'),
+                  ),
+                  OutlinedButton.icon(
                     onPressed: _tick,
                     icon: const Icon(Icons.update),
+                    label: const Text('检查到期'),
                   ),
                 ],
               ),
-            ),
-            Expanded(
-              child: RefreshIndicator(
-                onRefresh: _tick,
-                child: _ReminderList(
-                  items: widget.study.engine.items,
-                  onAck: _ack,
-                  onMiss: _miss,
-                  onCensor: _censor,
-                ),
-              ),
-            ),
-          ],
+            ],
+          ),
         ),
-        Positioned(
-          right: 16,
-          bottom: 16,
-          child: FloatingActionButton.extended(
-            onPressed: _openAdd,
-            icon: const Icon(Icons.add),
-            label: const Text('添加提醒'),
+        Expanded(
+          child: RefreshIndicator(
+            onRefresh: _tick,
+            child: _ReminderList(
+              items: widget.study.engine.items,
+              onAck: _ack,
+              onMiss: _miss,
+              onCensor: _censor,
+            ),
           ),
         ),
       ],
@@ -320,12 +328,12 @@ class _ReminderList extends StatelessWidget {
       return ListView(
         physics: const AlwaysScrollableScrollPhysics(),
         children: const [
-          SizedBox(height: 80),
+          SizedBox(height: 48),
           Center(child: Icon(Icons.event_available_outlined, size: 48)),
-          SizedBox(height: 8),
+          SizedBox(height: 12),
           Text('还没有提醒', textAlign: TextAlign.center),
-          SizedBox(height: 4),
-          Text('点右下角添加服药或喝水', textAlign: TextAlign.center),
+          SizedBox(height: 8),
+          Text('用上面的「添加提醒」记下服药或喝水', textAlign: TextAlign.center),
         ],
       );
     }
@@ -353,12 +361,12 @@ class _ReminderList extends StatelessWidget {
     final sections = [('今天', today), ('即将到期', upcoming), ('已完成', done)];
     return ListView(
       physics: const AlwaysScrollableScrollPhysics(),
-      padding: const EdgeInsets.fromLTRB(16, 8, 16, 88),
+      padding: const EdgeInsets.fromLTRB(16, 8, 16, 24),
       children: [
         for (final section in sections)
           if (section.$2.isNotEmpty) ...[
             Padding(
-              padding: const EdgeInsets.only(top: 8, bottom: 8),
+              padding: const EdgeInsets.only(top: 16, bottom: 8),
               child: Text(
                 section.$1,
                 style: Theme.of(context).textTheme.titleSmall,
@@ -398,7 +406,7 @@ class _ReminderTile extends StatelessWidget {
     String two(int value) => value.toString().padLeft(2, '0');
     final when = '${two(due.hour)}:${two(due.minute)}';
     return Card(
-      margin: const EdgeInsets.only(bottom: 8),
+      margin: const EdgeInsets.only(bottom: 12),
       child: ListTile(
         leading: CircleAvatar(
           backgroundColor: water
