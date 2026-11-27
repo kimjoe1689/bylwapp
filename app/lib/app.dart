@@ -3,9 +3,10 @@ import 'package:material_ui/material_ui.dart';
 import 'package:bylwapp/api/server_client.dart';
 import 'package:bylwapp/ble/ble_client.dart';
 import 'package:bylwapp/data/health_repository.dart';
-import 'package:bylwapp/screens/home_screen.dart';
 import 'package:bylwapp/screens/study_screens.dart';
 import 'package:bylwapp/settings/settings_store.dart';
+import 'package:bylwapp/ui/app_shell.dart';
+import 'package:bylwapp/ui/app_theme.dart';
 
 class BylwApp extends StatelessWidget {
   const BylwApp({
@@ -28,22 +29,11 @@ class BylwApp extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final elder = prefs?.elderMode ?? false;
-    final base = ThemeData(
-      colorScheme: ColorScheme.fromSeed(seedColor: const Color(0xFF0F6E56)),
-    );
     return MaterialApp(
       title: 'bylwapp',
-      theme: elder
-          ? base.copyWith(
-              colorScheme: const ColorScheme.highContrastLight(
-                primary: Color(0xFF0B3D2E),
-                onPrimary: Colors.white,
-              ),
-              textTheme: base.textTheme.apply(fontSizeFactor: 1.35),
-              visualDensity: VisualDensity.standard,
-            )
-          : base,
-      home: HomeScreen(
+      theme: buildBylwTheme(brightness: Brightness.light, elder: elder),
+      darkTheme: buildBylwTheme(brightness: Brightness.dark, elder: elder),
+      home: AppShell(
         repository: repository,
         settings: settings,
         ble: ble,

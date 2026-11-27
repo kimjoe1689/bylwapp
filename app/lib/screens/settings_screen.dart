@@ -9,11 +9,17 @@ class SettingsScreen extends StatefulWidget {
     required this.settings,
     this.clientFactory,
     this.prefs,
+    this.embedded = false,
+    this.onOpenDebug,
+    this.onChanged,
   });
 
   final SettingsStore settings;
   final ServerClient Function(String baseUrl)? clientFactory;
   final CollectorPrefs? prefs;
+  final bool embedded;
+  final VoidCallback? onOpenDebug;
+  final VoidCallback? onChanged;
 
   @override
   State<SettingsScreen> createState() => _SettingsScreenState();
@@ -84,46 +90,72 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(title: const Text('设置')),
-      body: Padding(
-        padding: const EdgeInsets.all(16),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            const Text('服务器地址'),
-            const SizedBox(height: 8),
-            TextField(
-              controller: _controller,
-              enabled: _ready && !_busy,
-              decoration: const InputDecoration(
-                border: OutlineInputBorder(),
-                hintText: defaultServerBaseUrl,
-              ),
-              keyboardType: TextInputType.url,
-            ),
-            const SizedBox(height: 8),
-            const Text('手机和电脑需要能互相访问。模拟器访问本机服务时，地址通常不是 127.0.0.1。'),
-            const SizedBox(height: 16),
-            if (widget.prefs != null)
-              SwitchListTile(
-                title: const Text('大字高对比'),
-                value: widget.prefs!.elderMode,
-                onChanged: (value) =>
-                    setState(() => widget.prefs!.elderMode = value),
-              ),
-            FilledButton(
-              onPressed: _ready && !_busy ? _save : null,
-              child: const Text('保存'),
-            ),
-            const SizedBox(height: 8),
-            OutlinedButton(
-              onPressed: _ready && !_busy ? _check : null,
-              child: const Text('检测连接'),
-            ),
-          ],
+    final body = ListView(
+      padding: const EdgeInsets.all(16),
+      children: [
+        Text('我的', style: Theme.of(context).textTheme.headlineSmall),
+        const SizedBox(height: 8),
+        const Text('后台地址'),
+        const SizedBox(height: 8),
+        TextField(
+          controller: _controller,
+          enabled: _ready && !_busy,
+          decoration: const InputDecoration(
+            border: OutlineInputBorder(),
+            hintText: defaultServerBaseUrl,
+          ),
+          keyboardType: TextInputType.url,
         ),
-      ),
+        const SizedBox(height: 8),
+        const Text(
+          '手机请填写电脑的局域网地址，例如 http://192.168.1.20:8080。电脑上的服务要用 0.0.0.0:8080 监听。',
+        ),
+        const SizedBox(height: 12),
+        if (widget.prefs != null) ...[
+          SwitchListTile(
+            title: const Text('大字高对比'),
+            value: widget.prefs!.elderMode,
+            onChanged: (value) {
+              setState(() => widget.prefs!.elderMode = value);
+              widget.onChanged?.call();
+            },
+          ),
+          SwitchListTile(
+            title: const Text('演示数据'),
+            subtitle: const Text('只改变首页显示，不写入日志，不上传，不进入导出'),
+            value: widget.prefs!.showDemo,
+            onChanged: (value) {
+              setState(() => widget.prefs!.showDemo = value);
+              widget.onChanged?.call();
+            },
+          ),
+          SwitchListTile(
+            title: const Text('自动同步'),
+            value: widget.prefs!.autoSync,
+            onChanged: (value) =>
+                setState(() => widget.prefs!.autoSync = value),
+          ),
+        ],
+        FilledButton(
+          onPressed: _ready && !_busy ? _save : null,
+          child: const Text('保存'),
+        ),
+        const SizedBox(height: 8),
+        OutlinedButton(
+          onPressed: _ready && !_busy ? _check : null,
+          child: const Text('检测连接'),
+        ),
+        const SizedBox(height: 8),
+        OutlinedButton(
+          onPressed: widget.onOpenDebug,
+          child: const Text('蓝牙调试'),
+        ),
+      ],
+    );
+    if (widget.embedded) return body;
+    return Scaffold(
+      appBar: AppBar(title: const Text('我的')),
+      body: body,
     );
   }
 }

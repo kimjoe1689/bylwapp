@@ -52,9 +52,10 @@ class StudyBundle {
 }
 
 class ReminderScreen extends StatefulWidget {
-  const ReminderScreen({super.key, required this.study});
+  const ReminderScreen({super.key, required this.study, this.embedded = false});
 
   final StudyBundle study;
+  final bool embedded;
 
   @override
   State<ReminderScreen> createState() => _ReminderScreenState();
@@ -156,37 +157,43 @@ class _ReminderScreenState extends State<ReminderScreen> {
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(title: const Text('提醒')),
-      body: ListView(
-        padding: const EdgeInsets.all(16),
-        children: [
-          const Text('服药和喝水提醒会先写入本地日志。到点后点“检查到期”，再确认、错过或标记删失。'),
-          const SizedBox(height: 12),
-          DropdownButton<String>(
-            value: _kind,
-            items: const [
-              DropdownMenuItem(value: 'MEDICATION', child: Text('服药')),
-              DropdownMenuItem(value: 'HYDRATION', child: Text('喝水')),
-            ],
-            onChanged: (value) => setState(() => _kind = value ?? 'MEDICATION'),
-          ),
-          TextField(
-            controller: _minutes,
-            decoration: const InputDecoration(labelText: '几分钟后提醒'),
-            keyboardType: TextInputType.number,
-          ),
-          const SizedBox(height: 8),
-          FilledButton(onPressed: _add, child: const Text('添加提醒')),
-          FilledButton(onPressed: _tick, child: const Text('检查到期')),
-          for (final item in widget.study.engine.items)
-            ListTile(
-              title: Text('${item.kind} ${item.disposition}'),
-              subtitle: Text(item.scheduleId),
+    final body = ListView(
+      padding: const EdgeInsets.all(16),
+      children: [
+        Text('提醒', style: Theme.of(context).textTheme.headlineSmall),
+        const SizedBox(height: 8),
+        const Text('服药和喝水会先写入本地日志。到点后点「检查到期」，再用按钮确认、标记错过或删失。'),
+        const SizedBox(height: 12),
+        DropdownButton<String>(
+          value: _kind,
+          items: const [
+            DropdownMenuItem(value: 'MEDICATION', child: Text('服药')),
+            DropdownMenuItem(value: 'HYDRATION', child: Text('喝水')),
+          ],
+          onChanged: (value) => setState(() => _kind = value ?? 'MEDICATION'),
+        ),
+        TextField(
+          controller: _minutes,
+          decoration: const InputDecoration(labelText: '几分钟后提醒'),
+          keyboardType: TextInputType.number,
+        ),
+        const SizedBox(height: 8),
+        FilledButton(onPressed: _add, child: const Text('添加提醒')),
+        FilledButton(onPressed: _tick, child: const Text('检查到期')),
+        for (final item in widget.study.engine.items)
+          Card(
+            child: ListTile(
+              leading: Icon(
+                item.kind == 'HYDRATION'
+                    ? Icons.water_drop_outlined
+                    : Icons.medication_outlined,
+              ),
+              title: Text(item.kind == 'HYDRATION' ? '喝水' : '服药'),
+              subtitle: Text(_reminderLabel(item.disposition)),
               trailing: Wrap(
-                spacing: 8,
+                spacing: 4,
                 children: [
-                  TextButton(
+                  FilledButton.tonal(
                     onPressed: () => _ack(item),
                     child: const Text('确认'),
                   ),
@@ -197,9 +204,33 @@ class _ReminderScreenState extends State<ReminderScreen> {
                 ],
               ),
             ),
-        ],
-      ),
+          ),
+      ],
     );
+    if (widget.embedded) return body;
+    return Scaffold(
+      appBar: AppBar(title: const Text('提醒')),
+      body: body,
+    );
+  }
+}
+
+String _reminderLabel(String disposition) {
+  switch (disposition) {
+    case 'SCHEDULED':
+      return '已安排';
+    case 'COMMAND_LOGGED':
+      return '已到点，等待确认';
+    case 'ACK_TIMELY':
+      return '已及时确认';
+    case 'ACK_DELAYED':
+      return '延迟确认';
+    case 'MISSED':
+      return '已错过';
+    case 'CENSORED':
+      return '已删失';
+    default:
+      return disposition;
   }
 }
 
@@ -316,6 +347,14 @@ class SusScreen extends StatefulWidget {
 
 class _SusScreenState extends State<SusScreen> {
   final List<int> _answers = List<int>.filled(10, 0);
+  final PageController _pages = PageController();
+  int _page = 0;
+
+  @override
+  void dispose() {
+    _pages.dispose();
+    super.dispose();
+  }
 
   Future<void> _save() async {
     final response = SusResponse(_answers);
@@ -353,23 +392,53 @@ class _SusScreenState extends State<SusScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text('SUS')),
-      body: ListView(
-        padding: const EdgeInsets.all(16),
+      appBar: AppBar(title: Text('SUS ${_page + 1}/10')),
+      body: Column(
         children: [
-          const Text('10 题都回答后才计算分数。这只是记录，不是已完成的伦理评估。'),
-          for (var i = 0; i < susPrompts.length; i++) ...[
-            Text(susPrompts[i]),
-            Slider(
-              value: _answers[i].toDouble(),
-              min: 0,
-              max: 5,
-              divisions: 5,
-              label: _answers[i] == 0 ? '未答' : '${_answers[i]}',
-              onChanged: (value) => setState(() => _answers[i] = value.round()),
+          LinearProgressIndicator(value: (_page + 1) / 10),
+          Expanded(
+            child: PageView.builder(
+              controller: _pages,
+              itemCount: 10,
+              onPageChanged: (value) => setState(() => _page = value),
+              itemBuilder: (context, index) {
+                return Padding(
+                  padding: const EdgeInsets.all(24),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        susPrompts[index],
+                        style: Theme.of(context).textTheme.titleLarge,
+                      ),
+                      const Spacer(),
+                      Slider(
+                        value: _answers[index].toDouble(),
+                        min: 0,
+                        max: 5,
+                        divisions: 5,
+                        label: _answers[index] == 0
+                            ? '未答'
+                            : '${_answers[index]}',
+                        onChanged: (value) =>
+                            setState(() => _answers[index] = value.round()),
+                      ),
+                      const Spacer(),
+                      FilledButton(
+                        onPressed: index == 9
+                            ? _save
+                            : () => _pages.nextPage(
+                                duration: const Duration(milliseconds: 240),
+                                curve: Curves.easeOut,
+                              ),
+                        child: Text(index == 9 ? '保存问卷' : '下一题'),
+                      ),
+                    ],
+                  ),
+                );
+              },
             ),
-          ],
-          FilledButton(onPressed: _save, child: const Text('保存问卷')),
+          ),
         ],
       ),
     );

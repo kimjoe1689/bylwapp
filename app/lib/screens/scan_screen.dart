@@ -7,6 +7,7 @@ import 'package:bylwapp/ble/driver_registry.dart';
 import 'package:bylwapp/ble/ring/ring_sync.dart';
 import 'package:bylwapp/data/health_repository.dart';
 import 'package:bylwapp/models/health_record.dart';
+import 'package:bylwapp/screens/device_detail_screen.dart';
 
 class ScanScreen extends StatefulWidget {
   const ScanScreen({
@@ -14,20 +15,27 @@ class ScanScreen extends StatefulWidget {
     required this.repository,
     required this.ble,
     this.onJournal,
+    this.embedded = false,
   });
 
   final HealthRepository repository;
   final BleClient ble;
   final Future<void> Function(HealthMeasurement measurement, BleScanHit hit)?
   onJournal;
+  final bool embedded;
 
   @override
   State<ScanScreen> createState() => _ScanScreenState();
 }
 
-class _ScanScreenState extends State<ScanScreen> {
+class _ScanScreenState extends State<ScanScreen>
+    with SingleTickerProviderStateMixin {
   List<BleScanHit> _hits = const [];
   StreamSubscription<List<BleScanHit>>? _sub;
+  late final AnimationController _spin = AnimationController(
+    vsync: this,
+    duration: const Duration(seconds: 2),
+  );
   bool _scanning = false;
   BleScanHit? _connected;
   bool _busy = false;
@@ -45,16 +53,19 @@ class _ScanScreenState extends State<ScanScreen> {
   @override
   void dispose() {
     _sub?.cancel();
+    _spin.dispose();
     super.dispose();
   }
 
   Future<void> _toggleScan() async {
     if (_scanning) {
       await widget.ble.stopScan();
+      _spin.stop();
       setState(() => _scanning = false);
       return;
     }
     setState(() => _scanning = true);
+    _spin.repeat();
     try {
       await widget.ble.startScan();
     } catch (error) {
@@ -140,57 +151,81 @@ class _ScanScreenState extends State<ScanScreen> {
     final connected = _connected;
     final temperature =
         connected != null && ringNameSupportsTemperature(connected.name);
-    return Scaffold(
-      appBar: AppBar(title: const Text('扫描设备')),
-      body: ListView(
-        padding: const EdgeInsets.all(16),
-        children: [
-          const Text(
-            '目标设备：鱼跃 YE680B 血压计、迈金 H303 心率带、Colmi R09 / Yawell R05 戒指。',
-          ),
-          const SizedBox(height: 8),
-          const Text(
-            '没有真机时无法完成蓝牙连接。血压 SFLOAT、心率标志位和戒指校验都由单元测试覆盖。体温记录必须先打开，而且只有 R09 / R05 支持。',
-          ),
-          const SizedBox(height: 16),
-          FilledButton(
-            onPressed: _busy ? null : _toggleScan,
-            child: Text(_scanning ? '停止扫描' : '开始扫描'),
-          ),
-          if (connected != null) ...[
-            const SizedBox(height: 12),
-            Text('已连接 ${connected.name}'),
-            const SizedBox(height: 8),
-            OutlinedButton(
-              onPressed: _busy ? null : _sync,
-              child: const Text('同步'),
+    final content = ListView(
+      padding: const EdgeInsets.all(16),
+      children: [
+        Text('设备', style: Theme.of(context).textTheme.headlineSmall),
+        const SizedBox(height: 8),
+        const Text('1. 打开戒指、心率带或血压计的蓝牙。\n2. 点下面的扫描。\n3. 在卡片上连接，再进入详情看历史。'),
+        const SizedBox(height: 12),
+        Center(
+          child: RotationTransition(
+            turns: _spin,
+            child: Icon(
+              Icons.radar,
+              size: 72,
+              color: Theme.of(context).colorScheme.primary,
             ),
-            if (temperature)
-              const Padding(
-                padding: EdgeInsets.only(top: 8),
-                child: Text('同步会先写入体温记录开关。戒指开始记录之前，历史里不会有体温。这一步需要实机确认。'),
-              ),
-          ],
-          const SizedBox(height: 16),
-          if (_hits.isEmpty)
-            const Text('尚未发现设备。')
-          else
-            for (final hit in _hits)
-              ListTile(
-                contentPadding: EdgeInsets.zero,
+          ),
+        ),
+        const SizedBox(height: 8),
+        FilledButton(
+          onPressed: _busy ? null : _toggleScan,
+          child: Text(_scanning ? '停止扫描' : '开始扫描'),
+        ),
+        if (connected != null) ...[
+          const SizedBox(height: 12),
+          Text('已连接 ${connected.name}'),
+          OutlinedButton(
+            onPressed: _busy ? null : _sync,
+            child: const Text('读取设备历史'),
+          ),
+          if (temperature) const Text('R09 / R05 会先尝试打开体温记录。没有实机时这里不会出现读数。'),
+        ],
+        const SizedBox(height: 12),
+        if (_hits.isEmpty)
+          const Card(
+            child: ListTile(
+              title: Text('附近还没有设备'),
+              subtitle: Text('扫描后，戒指、心率带和血压计会以卡片出现。'),
+            ),
+          )
+        else
+          for (final hit in _hits)
+            Card(
+              child: ListTile(
+                leading: const Icon(Icons.bluetooth_connected),
                 title: Text(hit.name),
                 subtitle: Text(
                   '${hit.address} · ${hit.rssi} dBm · ${driverById(hit.driverId)?.displayName ?? '未识别'}',
                 ),
-                trailing: TextButton(
+                trailing: FilledButton.tonal(
                   onPressed: _busy || hit.driverId == null
                       ? null
                       : () => _connect(hit),
                   child: const Text('连接'),
                 ),
+                onTap: () async {
+                  final all = await widget.repository.listRecent();
+                  final mine = all
+                      .where((record) => record.device.address == hit.address)
+                      .toList();
+                  if (!context.mounted) return;
+                  await Navigator.of(context).push(
+                    MaterialPageRoute<void>(
+                      builder: (context) =>
+                          DeviceDetailScreen(title: hit.name, records: mine),
+                    ),
+                  );
+                },
               ),
-        ],
-      ),
+            ),
+      ],
+    );
+    if (widget.embedded) return content;
+    return Scaffold(
+      appBar: AppBar(title: const Text('设备')),
+      body: content,
     );
   }
 }

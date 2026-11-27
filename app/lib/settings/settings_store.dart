@@ -55,6 +55,7 @@ class CollectorPrefs {
     this.faultTimeoutAfterCommit = false,
     this.faultClockSkew = false,
     this.careWindowMinutes = 30,
+    this.showDemo = false,
   });
 
   String collectorId;
@@ -65,6 +66,9 @@ class CollectorPrefs {
   bool faultTimeoutAfterCommit;
   bool faultClockSkew;
   int careWindowMinutes;
+
+  /// Display-only sample readings. Never written to the journal or uploaded.
+  bool showDemo;
 }
 
 bool isHttpUrl(String value) {
