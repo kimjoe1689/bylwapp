@@ -5,309 +5,218 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>bylwapp 管理后台</title>
   <style>
-    :root {
-      --ink: #1c1915;
-      --muted: #5e584e;
-      --line: #e4dfd4;
-      --paper: #f6f3ec;
-      --card: #fffdf8;
-      --accent: #0f6e56;
-      --accent-ink: #ffffff;
-      --danger: #8d2f2f;
-    }
+    :root { --ink:#1c1915; --muted:#5e584e; --line:#e4dfd4; --paper:#f6f3ec; --card:#fffdf8; --accent:#0f6e56; }
     * { box-sizing: border-box; }
-    body {
-      margin: 0;
-      font: 15px/1.5 "Source Han Sans SC", "Noto Sans SC", "PingFang SC", "Microsoft YaHei", sans-serif;
-      color: var(--ink);
-      background: var(--paper);
-    }
-    header, main { width: min(1080px, calc(100% - 32px)); margin: 0 auto; }
-    header { padding: 28px 0 8px; display: flex; justify-content: space-between; gap: 16px; align-items: end; }
-    h1 { font-size: 28px; margin: 0; letter-spacing: -0.03em; }
-    h2 { font-size: 18px; margin: 0 0 12px; }
-    p.note { color: var(--muted); margin: 6px 0 0; }
-    .pill { border: 1px solid var(--line); background: var(--card); border-radius: 999px; padding: 6px 12px; }
-    .pill.ok { color: var(--accent); }
-    .pill.bad { color: var(--danger); }
-    section { background: var(--card); border: 1px solid var(--line); border-radius: 16px; padding: 18px; margin: 16px 0; }
-    .row { display: flex; flex-wrap: wrap; gap: 10px; align-items: end; }
-    label { display: flex; flex-direction: column; gap: 4px; font-size: 13px; color: var(--muted); }
-    input, select, textarea, button {
-      font: inherit;
-      color: var(--ink);
-      border: 1px solid var(--line);
-      border-radius: 10px;
-      padding: 8px 10px;
-      background: white;
-    }
-    textarea { min-width: 280px; min-height: 72px; }
-    button { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); cursor: pointer; }
-    button.ghost { background: white; color: var(--ink); }
-    button.danger { background: white; color: var(--danger); border-color: #e7c7c7; }
-    table { width: 100%; border-collapse: collapse; }
-    th, td { text-align: left; padding: 8px 6px; border-bottom: 1px solid var(--line); vertical-align: top; }
-    th { color: var(--muted); font-weight: 600; font-size: 13px; }
-    .empty { color: var(--muted); padding: 12px 0; }
-    .banner { display: none; margin-top: 12px; padding: 10px 12px; border-radius: 10px; background: #f8e8e4; color: var(--danger); }
-    code { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 12px; }
+    body { margin:0; font:15px/1.5 "Source Han Sans SC","Noto Sans SC","PingFang SC","Microsoft YaHei",sans-serif; color:var(--ink); background:var(--paper); }
+    header, main { width:min(1100px, calc(100% - 28px)); margin:0 auto; }
+    header { padding:24px 0 8px; display:flex; justify-content:space-between; gap:12px; align-items:end; }
+    h1 { margin:0; font-size:28px; }
+    h2 { margin:0 0 10px; font-size:18px; }
+    .note { color:var(--muted); margin:6px 0 0; }
+    section { background:var(--card); border:1px solid var(--line); border-radius:16px; padding:16px; margin:14px 0; }
+    label { display:flex; flex-direction:column; gap:4px; font-size:13px; color:var(--muted); }
+    input, select, button { font:inherit; border:1px solid var(--line); border-radius:10px; padding:8px 10px; background:white; color:var(--ink); }
+    button { background:var(--accent); color:white; border-color:var(--accent); cursor:pointer; }
+    button.ghost { background:white; color:var(--ink); }
+    .row { display:flex; flex-wrap:wrap; gap:10px; align-items:end; }
+    table { width:100%; border-collapse:collapse; }
+    th, td { text-align:left; padding:7px 6px; border-bottom:1px solid var(--line); vertical-align:top; font-size:13px; }
+    .cards { display:grid; grid-template-columns:repeat(auto-fit,minmax(220px,1fr)); gap:10px; }
+    .card { border:1px solid var(--line); border-radius:12px; padding:12px; }
+    .stale { color:#8d2f2f; }
+    .banner { display:none; margin-top:10px; padding:10px; border-radius:10px; background:#f8e8e4; color:#8d2f2f; }
+    svg { width:100%; height:180px; background:#fbfaf6; border-radius:12px; }
+    code { font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:12px; }
   </style>
 </head>
 <body>
   <header>
     <div>
       <h1>bylwapp 管理后台</h1>
-      <p class="note">接收客户端上传的血压、心率和戒指测量。当前没有登录认证，请只在可信网络使用。</p>
+      <p class="note">采集端是手机应用。这里只显示服务器已经收到的副本，最近 100 条不是丢失清单，也不能当作论文结果。</p>
     </div>
-    <div id="health" class="pill">检查中</div>
+    <button class="ghost" id="logout" type="button" hidden>退出</button>
   </header>
   <main>
     <div id="banner" class="banner"></div>
-    <section>
-      <h2>录入一条测量</h2>
-      <form id="entry" class="row">
-        <label>设备名称<input name="name" required value="YE680B"></label>
-        <label>类型
-          <select name="kind">
-            <option value="blood_pressure">血压计</option>
-            <option value="heart_rate">心率带</option>
-            <option value="ring">戒指</option>
-          </select>
-        </label>
-        <label>地址<input name="address" required value="AA:BB:CC:DD:EE:01"></label>
-        <label>型号<input name="model" value="Yuwell YE680B"></label>
-        <label>测量
-          <select name="type" id="type">
-            <option value="blood_pressure">血压</option>
-            <option value="heart_rate">心率</option>
-            <option value="steps">步数</option>
-            <option value="spo2">血氧</option>
-            <option value="sleep">睡眠</option>
-            <option value="stress">压力</option>
-            <option value="hrv">HRV</option>
-            <option value="temperature">体温</option>
-          </select>
-        </label>
-        <label>单位<input name="unit" id="unit" required value="mmHg"></label>
-        <label>时间<input name="recorded_at" id="recorded_at" type="datetime-local" required></label>
-        <label>数值 JSON<textarea name="values" id="values">{"systolic":120,"diastolic":80,"pulse":72}</textarea></label>
-        <button type="submit">保存</button>
+    <section id="login">
+      <h2>护理者 / 管理员登录</h2>
+      <form id="login-form" class="row">
+        <label>用户名<input name="username" required autocomplete="username"></label>
+        <label>密码<input name="password" type="password" required autocomplete="current-password"></label>
+        <button type="submit">登录</button>
       </form>
     </section>
-    <section>
-      <div class="row" style="justify-content: space-between;">
-        <h2>设备</h2>
-        <button class="ghost" id="refresh" type="button">刷新</button>
-      </div>
-      <div id="devices"></div>
-    </section>
-    <section>
-      <div class="row">
-        <h2 style="margin-right: auto;">测量记录</h2>
-        <label>筛选
-          <select id="filter">
-            <option value="">全部</option>
-            <option value="blood_pressure">血压</option>
-            <option value="heart_rate">心率</option>
-            <option value="steps">步数</option>
-            <option value="spo2">血氧</option>
-            <option value="sleep">睡眠</option>
-            <option value="sleep_session">睡眠时段</option>
-            <option value="stress">压力</option>
-            <option value="hrv">HRV</option>
-            <option value="temperature">体温</option>
-          </select>
-        </label>
-      </div>
-      <div id="measurements"></div>
-    </section>
+    <div id="app" hidden>
+      <section>
+        <div class="row" style="justify-content:space-between">
+          <h2>采集端状态</h2>
+          <button class="ghost" id="refresh" type="button">刷新</button>
+        </div>
+        <div id="devices" class="cards"></div>
+      </section>
+      <section>
+        <div class="row">
+          <h2 style="margin-right:auto">趋势</h2>
+          <label>类型
+            <select id="series-type">
+              <option value="blood_pressure">血压收缩压</option>
+              <option value="heart_rate">心率</option>
+              <option value="spo2">血氧</option>
+              <option value="temperature">温度</option>
+              <option value="steps">步数</option>
+            </select>
+          </label>
+        </div>
+        <svg id="chart" viewBox="0 0 600 180"></svg>
+      </section>
+      <section>
+        <h2>最近 100 条事件</h2>
+        <div id="events"></div>
+      </section>
+      <section>
+        <h2>冲突</h2>
+        <p class="note">相同 event_id、不同 payload_hash 时保留第一份回执。</p>
+        <div id="conflicts"></div>
+      </section>
+      <section class="row">
+        <button type="button" id="csv">导出 CSV</button>
+        <button type="button" id="json">导出 JSON</button>
+        <button type="button" id="recon">导出对账 JSON</button>
+        <button type="button" id="rq1">RQ1 JSON</button>
+        <button type="button" id="rq2">RQ2 JSON</button>
+        <button type="button" id="rq3">RQ3 JSON</button>
+        <button type="button" id="rq4">RQ4 JSON</button>
+      </section>
+    </div>
   </main>
   <script>
-    const typeUnits = {
-      blood_pressure: "mmHg",
-      heart_rate: "bpm",
-      steps: "steps",
-      spo2: "%",
-      sleep: "min",
-      stress: "level",
-      hrv: "ms",
-      temperature: "°C"
-    };
-    const typeValues = {
-      blood_pressure: '{"systolic":120,"diastolic":80,"pulse":72}',
-      heart_rate: '{"bpm":72}',
-      steps: '{"steps":1200,"calories":50,"distance_m":800}',
-      spo2: '{"spo2":98}',
-      sleep: '{"stage":"deep","duration_min":40}',
-      stress: '{"stress":35}',
-      hrv: '{"hrv_ms":42}',
-      temperature: '{"celsius":36.5}'
-    };
     const banner = document.querySelector("#banner");
-    function showError(err) {
-      banner.style.display = "block";
-      banner.textContent = err.message || String(err);
-    }
+    const tokenKey = "bylw_token";
+    function token() { return sessionStorage.getItem(tokenKey) || ""; }
+    function showError(error) { banner.style.display = "block"; banner.textContent = error.message || String(error); }
     function clearError() { banner.style.display = "none"; }
-    async function api(path, options) {
-      const response = await fetch(path, options);
+    async function api(path) {
+      const response = await fetch(path, { headers: { Authorization: "Bearer " + token() } });
       const text = await response.text();
       const data = text ? JSON.parse(text) : null;
+      if (response.status === 401) { logout(); throw new Error("请重新登录"); }
       if (!response.ok) throw new Error((data && data.error) || response.statusText);
       return data;
     }
-    function cell(text) {
-      const td = document.createElement("td");
-      td.textContent = text == null ? "" : String(text);
-      return td;
-    }
-    async function refreshHealth() {
-      const el = document.querySelector("#health");
-      try {
-        const data = await api("/health");
-        el.textContent = "服务正常 " + data.time;
-        el.className = "pill ok";
-      } catch (err) {
-        el.textContent = "服务异常";
-        el.className = "pill bad";
-      }
-    }
-    async function refreshDevices() {
-      const host = document.querySelector("#devices");
-      const devices = await api("/api/devices");
-      host.replaceChildren();
-      if (!devices.length) {
-        const p = document.createElement("p");
-        p.className = "empty";
-        p.textContent = "还没有设备。";
-        host.append(p);
-        return;
-      }
-      const table = document.createElement("table");
+    function cell(text) { const td = document.createElement("td"); td.textContent = text == null ? "" : String(text); return td; }
+    function table(headers, rows) {
+      const el = document.createElement("table");
       const head = document.createElement("tr");
-      ["名称", "种类", "地址", "型号", ""].forEach((label) => {
-        const th = document.createElement("th");
-        th.textContent = label;
-        head.append(th);
-      });
-      table.append(head);
-      devices.forEach((device) => {
-        const tr = document.createElement("tr");
-        tr.append(cell(device.name), cell(device.kind), cell(device.address), cell(device.model));
-        const action = document.createElement("td");
-        const button = document.createElement("button");
-        button.className = "danger";
-        button.type = "button";
-        button.textContent = "删除";
-        button.addEventListener("click", async () => {
-          if (!confirm("删除这台设备及其测量记录？")) return;
-          await api("/api/devices/" + device.id, { method: "DELETE" });
-          await refreshAll();
-        });
-        action.append(button);
-        tr.append(action);
-        table.append(tr);
-      });
-      host.append(table);
+      headers.forEach((label) => { const th = document.createElement("th"); th.textContent = label; head.append(th); });
+      el.append(head);
+      rows.forEach((row) => { const tr = document.createElement("tr"); row.forEach((value) => tr.append(cell(value))); el.append(tr); });
+      return el;
     }
-    async function refreshMeasurements() {
-      const host = document.querySelector("#measurements");
-      const type = document.querySelector("#filter").value;
-      const path = type ? "/api/measurements?type=" + encodeURIComponent(type) : "/api/measurements";
-      const items = await api(path);
-      host.replaceChildren();
-      if (!items.length) {
-        const p = document.createElement("p");
-        p.className = "empty";
-        p.textContent = "还没有测量记录。";
-        host.append(p);
-        return;
-      }
-      const table = document.createElement("table");
-      const head = document.createElement("tr");
-      ["时间", "设备", "类型", "单位", "数值", ""].forEach((label) => {
-        const th = document.createElement("th");
-        th.textContent = label;
-        head.append(th);
-      });
-      table.append(head);
-      items.forEach((item) => {
-        const tr = document.createElement("tr");
-        tr.append(
-          cell(item.recorded_at),
-          cell(item.device_name + " (" + item.device_address + ")"),
-          cell(item.type),
-          cell(item.unit),
-          cell(JSON.stringify(item.values))
-        );
-        const action = document.createElement("td");
-        const button = document.createElement("button");
-        button.className = "danger";
-        button.type = "button";
-        button.textContent = "删除";
-        button.addEventListener("click", async () => {
-          await api("/api/measurements/" + item.id, { method: "DELETE" });
-          await refreshMeasurements();
-        });
-        action.append(button);
-        tr.append(action);
-        table.append(tr);
-      });
-      host.append(table);
-    }
-    async function refreshAll() {
+    async function refresh() {
       clearError();
-      try {
-        await refreshHealth();
-        await refreshDevices();
-        await refreshMeasurements();
-      } catch (err) {
-        showError(err);
-      }
+      const devices = await api("/api/v1/dashboard/devices");
+      const host = document.querySelector("#devices");
+      host.replaceChildren();
+      if (!devices.length) host.textContent = "还没有登记采集端。";
+      devices.forEach((device) => {
+        const card = document.createElement("div");
+        card.className = "card";
+        card.innerHTML = "<strong></strong><div></div><div></div><div></div>";
+        card.children[0].textContent = device.name + " (" + device.device_id + ")";
+        card.children[1].textContent = (device.sensor_model || "尚无事件") + " · " + (device.operating_state || "未知");
+        card.children[2].textContent = device.last_received_at ? "最近回执 " + device.last_received_at : "还没有回执";
+        card.children[3].textContent = "冲突 " + device.open_conflicts + " · 重复确认 " + device.duplicate_acks + (device.stale ? " · 同步偏旧" : "");
+        if (device.stale) card.children[3].className = "stale";
+        host.append(card);
+      });
+      const events = await api("/api/v1/dashboard/events");
+      const eventHost = document.querySelector("#events");
+      eventHost.replaceChildren();
+      const rows = (events.events || []).map((item) => [
+        item.server_received_at, item.event.device_id, item.event.measurement_type, item.event.unit,
+        JSON.stringify(item.event.values), item.event.operating_state
+      ]);
+      eventHost.append(rows.length ? table(["服务器回执时间", "采集端", "类型", "单位", "数值", "运行状态"], rows) : document.createTextNode("还没有事件。"));
+      const conflicts = await api("/api/v1/dashboard/conflicts");
+      const conflictHost = document.querySelector("#conflicts");
+      conflictHost.replaceChildren();
+      conflictHost.append(conflicts.length ? table(["时间", "采集端", "event_id", "已保留哈希", "后到哈希"], conflicts.map((row) => [row.at, row.device_id, row.event_id, row.stored_hash, row.presented_hash])) : document.createTextNode("没有冲突。"));
+      await drawSeries();
     }
-    document.querySelector("#type").addEventListener("change", (event) => {
-      const type = event.target.value;
-      document.querySelector("#unit").value = typeUnits[type] || "";
-      document.querySelector("#values").value = typeValues[type] || "{}";
-    });
-    document.querySelector("#filter").addEventListener("change", () => refreshMeasurements().catch(showError));
-    document.querySelector("#refresh").addEventListener("click", refreshAll);
-    document.querySelector("#entry").addEventListener("submit", async (event) => {
+    async function drawSeries() {
+      const type = document.querySelector("#series-type").value;
+      const points = await api("/api/v1/dashboard/series?type=" + encodeURIComponent(type));
+      const svg = document.querySelector("#chart");
+      svg.replaceChildren();
+      const ordered = [...points].reverse();
+      if (ordered.length < 2) {
+        const text = document.createElementNS("http://www.w3.org/2000/svg", "text");
+        text.setAttribute("x", "16"); text.setAttribute("y", "90"); text.textContent = "至少需要两个点才画趋势。";
+        svg.append(text);
+        return;
+      }
+      const values = ordered.map((point) => point.value);
+      const min = Math.min(...values), max = Math.max(...values);
+      const span = max - min || 1;
+      const poly = ordered.map((point, index) => {
+        const x = 16 + (index * 568) / (ordered.length - 1);
+        const y = 160 - ((point.value - min) / span) * 140;
+        return x.toFixed(1) + "," + y.toFixed(1);
+      }).join(" ");
+      const line = document.createElementNS("http://www.w3.org/2000/svg", "polyline");
+      line.setAttribute("fill", "none"); line.setAttribute("stroke", "#0f6e56"); line.setAttribute("stroke-width", "2");
+      line.setAttribute("points", poly);
+      svg.append(line);
+    }
+    async function download(path, filename) {
+      const response = await fetch(path, { headers: { Authorization: "Bearer " + token() } });
+      if (!response.ok) { showError(new Error("导出失败")); return; }
+      const blob = await response.blob();
+      const link = document.createElement("a");
+      link.href = URL.createObjectURL(blob);
+      link.download = filename;
+      link.click();
+    }
+    function logout() {
+      sessionStorage.removeItem(tokenKey);
+      document.querySelector("#login").hidden = false;
+      document.querySelector("#app").hidden = true;
+      document.querySelector("#logout").hidden = true;
+    }
+    document.querySelector("#login-form").addEventListener("submit", async (event) => {
       event.preventDefault();
       const form = new FormData(event.target);
-      let values;
-      try { values = JSON.parse(form.get("values")); }
-      catch (err) { showError(new Error("数值不是合法 JSON")); return; }
-      const recorded = new Date(form.get("recorded_at"));
-      if (Number.isNaN(recorded.getTime())) { showError(new Error("时间无效")); return; }
       try {
-        await api("/api/sync", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            device: {
-              name: form.get("name"),
-              kind: form.get("kind"),
-              address: form.get("address"),
-              model: form.get("model")
-            },
-            measurements: [{
-              type: form.get("type"),
-              unit: form.get("unit"),
-              recorded_at: recorded.toISOString(),
-              values
-            }]
-          })
+        const response = await fetch("/api/v1/auth/login", {
+          method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ username: form.get("username"), password: form.get("password") })
         });
-        await refreshAll();
-      } catch (err) {
-        showError(err);
-      }
+        const data = await response.json();
+        if (!response.ok) throw new Error(data.error || "登录失败");
+        sessionStorage.setItem(tokenKey, data.token);
+        document.querySelector("#login").hidden = true;
+        document.querySelector("#app").hidden = false;
+        document.querySelector("#logout").hidden = false;
+        await refresh();
+      } catch (error) { showError(error); }
     });
-    const now = new Date();
-    now.setMinutes(now.getMinutes() - now.getTimezoneOffset());
-    document.querySelector("#recorded_at").value = now.toISOString().slice(0, 16);
-    refreshAll();
+    document.querySelector("#logout").addEventListener("click", logout);
+    document.querySelector("#refresh").addEventListener("click", () => refresh().catch(showError));
+    document.querySelector("#series-type").addEventListener("change", () => drawSeries().catch(showError));
+    document.querySelector("#csv").addEventListener("click", () => download("/api/v1/exports/events.csv", "events.csv"));
+    document.querySelector("#json").addEventListener("click", () => download("/api/v1/exports/events.json", "events.json"));
+    document.querySelector("#recon").addEventListener("click", () => download("/api/v1/exports/reconciliation.json", "reconciliation.json"));
+    document.querySelector("#rq1").addEventListener("click", () => download("/api/v1/exports/rq1.json", "rq1.json"));
+    document.querySelector("#rq2").addEventListener("click", () => download("/api/v1/exports/rq2.json", "rq2.json"));
+    document.querySelector("#rq3").addEventListener("click", () => download("/api/v1/exports/rq3.json", "rq3.json"));
+    document.querySelector("#rq4").addEventListener("click", () => download("/api/v1/exports/rq4.json", "rq4.json"));
+    if (token()) {
+      document.querySelector("#login").hidden = true;
+      document.querySelector("#app").hidden = false;
+      document.querySelector("#logout").hidden = false;
+      refresh().catch(showError);
+    }
   </script>
 </body>
 </html>

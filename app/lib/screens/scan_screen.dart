@@ -9,10 +9,17 @@ import 'package:bylwapp/data/health_repository.dart';
 import 'package:bylwapp/models/health_record.dart';
 
 class ScanScreen extends StatefulWidget {
-  const ScanScreen({super.key, required this.repository, required this.ble});
+  const ScanScreen({
+    super.key,
+    required this.repository,
+    required this.ble,
+    this.onJournal,
+  });
 
   final HealthRepository repository;
   final BleClient ble;
+  final Future<void> Function(HealthMeasurement measurement, BleScanHit hit)?
+  onJournal;
 
   @override
   State<ScanScreen> createState() => _ScanScreenState();
@@ -79,6 +86,7 @@ class _ScanScreenState extends State<ScanScreen> {
             ),
           );
           await widget.repository.insertMeasurement(hit.address, measurement);
+          await widget.onJournal?.call(measurement, hit);
         },
       );
       if (mounted) {

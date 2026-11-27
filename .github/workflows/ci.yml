@@ -20,6 +20,7 @@ jobs:
           cache-dependency-path: server/go.sum
       - run: CGO_ENABLED=0 go test ./...
       - run: CGO_ENABLED=0 go build -o /tmp/bylw-server ./cmd/server
+      - run: cd ../tools/device-sim && CGO_ENABLED=0 go build -o /tmp/device-sim .
 
   app:
     name: Flutter app

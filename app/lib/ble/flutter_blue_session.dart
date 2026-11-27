@@ -23,6 +23,11 @@ import 'package:bylwapp/models/health_record.dart';
 class FlutterBlueSession implements BleClient {
   final StreamController<List<BleScanHit>> _hits =
       StreamController<List<BleScanHit>>.broadcast();
+  final StreamController<BleTrace> _traces =
+      StreamController<BleTrace>.broadcast();
+
+  @override
+  Stream<BleTrace> get traces => _traces.stream;
   StreamSubscription<List<ScanResult>>? _scanSub;
   final List<StreamSubscription<List<int>>> _valueSubs = [];
   List<BluetoothService> _services = [];
@@ -107,6 +112,7 @@ class FlutterBlueSession implements BleClient {
         forceIndications: forceIndications,
       );
       final sub = characteristic.onValueReceived.listen((value) {
+        _trace('rx', watch.characteristicUuid, value);
         _onValue(watch.characteristicUuid, value);
       });
       _valueSubs.add(sub);
@@ -153,6 +159,19 @@ class FlutterBlueSession implements BleClient {
     }
   }
 
+  void _trace(String direction, String characteristicUuid, List<int> bytes) {
+    if (!_traces.isClosed) {
+      _traces.add(
+        BleTrace(
+          at: DateTime.now().toUtc(),
+          direction: direction,
+          characteristicUuid: characteristicUuid,
+          bytes: List<int>.from(bytes),
+        ),
+      );
+    }
+  }
+
   void _onValue(String characteristicUuid, List<int> value) {
     List<int>? packet = value;
     if (normalizeUuid(characteristicUuid) == ringNotifyV2Uuid) {
@@ -189,6 +208,7 @@ class FlutterBlueSession implements BleClient {
       if (characteristic == null) {
         continue;
       }
+      _trace('tx', write.characteristicUuid, write.bytes);
       await characteristic.write(write.bytes);
       return;
     }
@@ -220,6 +240,7 @@ class FlutterBlueSession implements BleClient {
         if (characteristic == null) {
           throw StateError('缺少特征 ${command.characteristicUuid}');
         }
+        _trace('tx', command.characteristicUuid, command.bytes);
         await characteristic.write(
           command.bytes,
           allowLongWrite: command.bytes.length > 20,

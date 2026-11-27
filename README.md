@@ -26,14 +26,19 @@ bylwapp/
 Flutter 设备驱动（解析报文）
         │
         ▼
-本机 SQLite（sqflite）
-        │  HTTP POST /api/sync
+本机 SQLite 日志（先写入并读回，再上传）
+        │  POST /api/v1/devices/{id}/events
+        │  超时后 GET 同一 event_id 读回
         ▼
 Go API（chi）── SQLite（modernc.org/sqlite，无 CGO）
         │
         ▼
 浏览器管理页  /
 ```
+
+论文里的四项研究问题对应的功能和导出见 [docs/rq-mapping.md](docs/rq-mapping.md)，组件对照见 [docs/architecture.md](docs/architecture.md)。没有真实记录时，RQ 导出的比率是 `not_evaluable`，程序不会编造结果。
+
+提醒、对照账、SUS 和任务计时在应用里。调试页可以看蓝牙原始字节，并注入断网、提交后超时、时钟异常。`server/devicesim` 与 `tools/device-sim` 用来在没有硬件时彩排同步，输出不能写入论文结果。
 
 客户端按广播名和服务 UUID 选择驱动：
 

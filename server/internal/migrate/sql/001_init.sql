@@ -1,23 +1,72 @@
+CREATE TABLE users (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    username TEXT NOT NULL UNIQUE,
+    password_hash TEXT NOT NULL,
+    role TEXT NOT NULL CHECK (role IN ('admin', 'caregiver')),
+    created_at TEXT NOT NULL
+);
+
+CREATE TABLE sessions (
+    token_hash TEXT PRIMARY KEY,
+    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    expires_at TEXT NOT NULL
+);
+
 CREATE TABLE devices (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    device_id TEXT PRIMARY KEY,
     name TEXT NOT NULL,
-    kind TEXT NOT NULL,
-    address TEXT NOT NULL UNIQUE,
-    model TEXT NOT NULL DEFAULT '',
-    created_at TEXT NOT NULL,
-    updated_at TEXT NOT NULL
+    created_at TEXT NOT NULL
 );
 
-CREATE TABLE measurements (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    device_id INTEGER NOT NULL REFERENCES devices(id) ON DELETE CASCADE,
-    type TEXT NOT NULL,
+CREATE TABLE device_tokens (
+    token_hash TEXT PRIMARY KEY,
+    device_id TEXT NOT NULL REFERENCES devices(device_id) ON DELETE CASCADE,
+    created_at TEXT NOT NULL,
+    revoked_at TEXT
+);
+
+CREATE TABLE events (
+    device_id TEXT NOT NULL,
+    event_id TEXT NOT NULL,
+    payload_hash TEXT NOT NULL,
+    canonical_json TEXT NOT NULL,
+    server_received_at TEXT NOT NULL,
+    measurement_type TEXT NOT NULL,
     unit TEXT NOT NULL,
-    recorded_at TEXT NOT NULL,
+    sensor_address TEXT NOT NULL,
+    sensor_kind TEXT NOT NULL,
+    sensor_model TEXT NOT NULL,
+    monotonic_us INTEGER NOT NULL,
+    wall_time_utc TEXT,
+    clock_state TEXT NOT NULL,
+    operating_state TEXT NOT NULL,
     values_json TEXT NOT NULL,
-    created_at TEXT NOT NULL,
-    UNIQUE (device_id, type, recorded_at)
+    PRIMARY KEY (device_id, event_id)
 );
 
-CREATE INDEX idx_measurements_type_time ON measurements(type, recorded_at);
-CREATE INDEX idx_measurements_recorded ON measurements(recorded_at);
+CREATE INDEX idx_events_received ON events(server_received_at DESC);
+CREATE INDEX idx_events_type ON events(measurement_type, server_received_at DESC);
+
+CREATE TABLE ingest_log (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    device_id TEXT NOT NULL,
+    event_id TEXT NOT NULL,
+    result TEXT NOT NULL CHECK (result IN ('stored', 'duplicate', 'conflict')),
+    presented_hash TEXT NOT NULL,
+    stored_hash TEXT NOT NULL,
+    at TEXT NOT NULL
+);
+
+CREATE INDEX idx_ingest_result ON ingest_log(result, at DESC);
+
+CREATE TABLE ground_truth (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    device_id TEXT NOT NULL,
+    match_key TEXT NOT NULL,
+    reference_type TEXT NOT NULL,
+    reference_value TEXT NOT NULL,
+    observed_at TEXT NOT NULL,
+    observer TEXT NOT NULL,
+    notes TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL
+);

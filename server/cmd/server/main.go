@@ -15,6 +15,7 @@ import (
 	"github.com/kimjoe1689/bylwapp/server/internal/httpapi"
 	"github.com/kimjoe1689/bylwapp/server/internal/migrate"
 	"github.com/kimjoe1689/bylwapp/server/internal/store"
+	"golang.org/x/crypto/bcrypt"
 )
 
 func main() {
@@ -38,10 +39,37 @@ func main() {
 		logger.Error("migrate", "err", err)
 		os.Exit(1)
 	}
+	if user, pass := os.Getenv("BYLW_BOOTSTRAP_ADMIN_USER"), os.Getenv("BYLW_BOOTSTRAP_ADMIN_PASSWORD"); user != "" || pass != "" {
+		if user == "" || len(pass) < 8 {
+			logger.Error("bootstrap admin requires BYLW_BOOTSTRAP_ADMIN_USER and a password of at least 8 characters")
+			os.Exit(2)
+		}
+		n, err := st.CountUsers(context.Background())
+		if err != nil {
+			logger.Error("count users", "err", err)
+			os.Exit(1)
+		}
+		if n == 0 {
+			if err := st.CreateUser(context.Background(), user, pass, "admin", bcrypt.DefaultCost); err != nil {
+				logger.Error("bootstrap admin", "err", err)
+				os.Exit(1)
+			}
+			logger.Info("bootstrapped admin", "username", user)
+		}
+	}
 
+	stale := 15 * time.Minute
+	if raw := os.Getenv("BYLW_STALE_AFTER"); raw != "" {
+		parsed, err := time.ParseDuration(raw)
+		if err != nil {
+			logger.Error("BYLW_STALE_AFTER", "err", err)
+			os.Exit(2)
+		}
+		stale = parsed
+	}
 	srv := &http.Server{
 		Addr:              cfg.Addr,
-		Handler:           httpapi.New(st),
+		Handler:           httpapi.New(st, stale),
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       15 * time.Second,
 		WriteTimeout:      30 * time.Second,

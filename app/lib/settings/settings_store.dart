@@ -45,6 +45,28 @@ class SharedPreferencesSettingsStore implements SettingsStore {
   }
 }
 
+class CollectorPrefs {
+  CollectorPrefs({
+    this.collectorId = 'phone-1',
+    this.deviceToken = '',
+    this.autoSync = true,
+    this.elderMode = false,
+    this.faultNetworkDown = false,
+    this.faultTimeoutAfterCommit = false,
+    this.faultClockSkew = false,
+    this.careWindowMinutes = 30,
+  });
+
+  String collectorId;
+  String deviceToken;
+  bool autoSync;
+  bool elderMode;
+  bool faultNetworkDown;
+  bool faultTimeoutAfterCommit;
+  bool faultClockSkew;
+  int careWindowMinutes;
+}
+
 bool isHttpUrl(String value) {
   final uri = Uri.tryParse(value.trim());
   return uri != null &&

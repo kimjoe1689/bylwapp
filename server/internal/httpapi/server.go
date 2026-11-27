@@ -1,11 +1,12 @@
-// Package httpapi is the admin JSON API and page router.
 package httpapi
 
 import (
+	"context"
+	"encoding/csv"
 	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
-	"strconv"
 	"strings"
 	"time"
 
@@ -13,60 +14,60 @@ import (
 	"github.com/go-chi/chi/v5/middleware"
 	"github.com/kimjoe1689/bylwapp/server/internal/store"
 	"github.com/kimjoe1689/bylwapp/server/internal/web"
+	"github.com/kimjoe1689/bylwapp/server/metrics"
+	"github.com/kimjoe1689/bylwapp/server/schema"
 )
 
-const maxSyncBatch = 500
-
-var deviceKinds = map[string]struct{}{
-	"blood_pressure": {},
-	"heart_rate":     {},
-	"ring":           {},
-}
-
-var measurementTypes = map[string]struct{}{
-	"blood_pressure": {},
-	"heart_rate":     {},
-	"steps":          {},
-	"spo2":           {},
-	"sleep":          {},
-	"sleep_session":  {},
-	"stress":         {},
-	"hrv":            {},
-	"temperature":    {},
-}
-
-// New builds the HTTP handler. The store must already be migrated.
-func New(st *store.Store) http.Handler {
-	api := &handler{store: st}
+// New builds the collector ingest API and caregiver dashboard.
+// Missing credentials are rejected. Device tokens cannot read the dashboard,
+// and caregiver tokens cannot ingest or administer devices.
+func New(st *store.Store, staleAfter time.Duration) http.Handler {
+	if staleAfter <= 0 {
+		staleAfter = 15 * time.Minute
+	}
+	h := &handler{store: st, staleAfter: staleAfter}
 	r := chi.NewRouter()
 	r.Use(middleware.RequestID)
-	r.Use(middleware.RealIP)
 	r.Use(middleware.Recoverer)
 	r.Use(middleware.Timeout(30 * time.Second))
 	r.Use(cors)
-
-	r.Get("/health", api.health)
+	r.Get("/health", h.health)
 	r.Get("/", web.Handler())
-	r.Get("/admin", web.Handler())
+	r.Post("/api/v1/auth/login", h.login)
+	r.Post("/api/v1/devices/{device_id}/events", h.ingest)
+	r.Get("/api/v1/devices/{device_id}/events/{event_id}", h.readBack)
 
-	r.Get("/api/devices", api.listDevices)
-	r.Post("/api/devices", api.createDevice)
-	r.Get("/api/devices/{id}", api.getDevice)
-	r.Put("/api/devices/{id}", api.updateDevice)
-	r.Delete("/api/devices/{id}", api.deleteDevice)
-
-	r.Get("/api/measurements", api.listMeasurements)
-	r.Post("/api/measurements", api.createMeasurement)
-	r.Get("/api/measurements/{id}", api.getMeasurement)
-	r.Put("/api/measurements/{id}", api.updateMeasurement)
-	r.Delete("/api/measurements/{id}", api.deleteMeasurement)
-
-	r.Post("/api/sync", api.sync)
+	r.Group(func(r chi.Router) {
+		r.Use(h.requireUser)
+		r.Get("/api/v1/dashboard/events", h.events)
+		r.Get("/api/v1/dashboard/devices", h.devices)
+		r.Get("/api/v1/dashboard/conflicts", h.conflicts)
+		r.Get("/api/v1/dashboard/series", h.series)
+		r.Get("/api/v1/exports/events.json", h.exportJSON)
+		r.Get("/api/v1/exports/events.csv", h.exportCSV)
+		r.Get("/api/v1/exports/reconciliation.json", h.exportReconciliation)
+		r.Get("/api/v1/exports/rq1.json", h.exportRQ1)
+		r.Get("/api/v1/exports/rq2.json", h.exportRQ2)
+		r.Get("/api/v1/exports/rq3.json", h.exportRQ3)
+		r.Get("/api/v1/exports/rq4.json", h.exportRQ4)
+		r.Get("/api/v1/ground-truth", h.listGroundTruth)
+		r.Post("/api/v1/ground-truth", h.addGroundTruth)
+		r.Post("/api/v1/ground-truth/import", h.importGroundTruth)
+		r.With(h.requireAdmin).Post("/api/v1/admin/users", h.createUser)
+		r.With(h.requireAdmin).Post("/api/v1/admin/devices", h.createDevice)
+		r.With(h.requireAdmin).Post("/api/v1/admin/devices/{device_id}/tokens", h.createToken)
+	})
 	return r
 }
 
 type handler struct {
-	store *store.Store
+	store      *store.Store
+	staleAfter time.Duration
+}
+
+type principal struct {
+	role     string
+	deviceID string
 }
 
 func (h *handler) health(w http.ResponseWriter, r *http.Request) {
@@ -74,365 +75,446 @@ func (h *handler) health(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"status": "degraded"})
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]string{
-		"status": "ok",
-		"time":   time.Now().UTC().Format(time.RFC3339),
-	})
+	writeJSON(w, http.StatusOK, map[string]string{"status": "ok", "time": time.Now().UTC().Format(time.RFC3339)})
 }
 
-func (h *handler) listDevices(w http.ResponseWriter, r *http.Request) {
-	devices, err := h.store.ListDevices(r.Context())
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "list devices failed")
+func (h *handler) login(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Username string `json:"username"`
+		Password string `json:"password"`
+	}
+	if !decode(w, r, &body) {
 		return
 	}
-	writeJSON(w, http.StatusOK, devices)
+	token, user, err := h.store.Login(r.Context(), strings.TrimSpace(body.Username), body.Password, 12*time.Hour)
+	if err != nil {
+		writeError(w, http.StatusUnauthorized, "invalid credentials")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"token": token, "role": user.Role, "username": user.Username})
 }
 
-func (h *handler) createDevice(w http.ResponseWriter, r *http.Request) {
-	body, err := decodeDevice(w, r)
-	if err != nil {
-		return
-	}
-	device, err := h.store.CreateDevice(r.Context(), body.Name, body.Kind, body.Address, body.Model)
-	if err != nil {
-		writeStoreError(w, err)
-		return
-	}
-	writeJSON(w, http.StatusCreated, device)
-}
-
-func (h *handler) getDevice(w http.ResponseWriter, r *http.Request) {
-	id, ok := pathID(w, r)
+func (h *handler) ingest(w http.ResponseWriter, r *http.Request) {
+	deviceID, ok := h.devicePrincipal(w, r)
 	if !ok {
 		return
 	}
-	device, err := h.store.GetDevice(r.Context(), id)
-	if err != nil {
-		writeStoreError(w, err)
-		return
-	}
-	writeJSON(w, http.StatusOK, device)
-}
-
-func (h *handler) updateDevice(w http.ResponseWriter, r *http.Request) {
-	id, ok := pathID(w, r)
-	if !ok {
+	if chi.URLParam(r, "device_id") != deviceID {
+		writeError(w, http.StatusForbidden, "device token does not match the path")
 		return
 	}
 	var body struct {
-		Name  string `json:"name"`
-		Kind  string `json:"kind"`
-		Model string `json:"model"`
+		Event       schema.Event `json:"event"`
+		PayloadHash string       `json:"payload_hash"`
 	}
-	if err := readJSON(w, r, &body); err != nil {
+	if !decode(w, r, &body) {
 		return
 	}
-	name, kind, model, err := normalizeDeviceUpdate(body.Name, body.Kind, body.Model)
+	event, err := schema.Prepare(body.Event)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	device, err := h.store.UpdateDevice(r.Context(), id, name, kind, model)
-	if err != nil {
-		writeStoreError(w, err)
+	if event.DeviceID != deviceID {
+		writeError(w, http.StatusBadRequest, "event.device_id does not match the path")
 		return
 	}
-	writeJSON(w, http.StatusOK, device)
-}
-
-func (h *handler) deleteDevice(w http.ResponseWriter, r *http.Request) {
-	id, ok := pathID(w, r)
-	if !ok {
-		return
-	}
-	if err := h.store.DeleteDevice(r.Context(), id); err != nil {
-		writeStoreError(w, err)
-		return
-	}
-	w.WriteHeader(http.StatusNoContent)
-}
-
-func (h *handler) listMeasurements(w http.ResponseWriter, r *http.Request) {
-	filter, err := measurementFilter(r)
+	hash, canonical, err := schema.PayloadHash(event)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	items, err := h.store.ListMeasurements(r.Context(), filter)
+	if !strings.EqualFold(strings.TrimSpace(body.PayloadHash), hash) {
+		writeError(w, http.StatusBadRequest, "payload_hash does not match the canonical event")
+		return
+	}
+	outcome, err := h.store.Ingest(r.Context(), event, hash, string(canonical))
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "list measurements failed")
+		writeError(w, http.StatusInternalServerError, "ingest failed")
+		return
+	}
+	status := http.StatusCreated
+	switch outcome.Result {
+	case "duplicate":
+		status = http.StatusOK
+	case "conflict":
+		status = http.StatusConflict
+	}
+	writeJSON(w, status, map[string]any{
+		"result":             outcome.Result,
+		"event_id":           event.EventID,
+		"payload_hash":       outcome.PayloadHash,
+		"server_received_at": outcome.ServerReceivedAt.UTC().Format(time.RFC3339Nano),
+	})
+}
+
+func (h *handler) readBack(w http.ResponseWriter, r *http.Request) {
+	deviceID := chi.URLParam(r, "device_id")
+	if user, ok := h.userIfAny(r); ok {
+		if user.role != "admin" && user.role != "caregiver" {
+			writeError(w, http.StatusForbidden, "forbidden")
+			return
+		}
+	} else {
+		tokenDevice, ok := h.devicePrincipal(w, r)
+		if !ok {
+			return
+		}
+		if tokenDevice != deviceID {
+			writeError(w, http.StatusForbidden, "device token does not match the path")
+			return
+		}
+	}
+	item, err := h.store.GetEvent(r.Context(), deviceID, chi.URLParam(r, "event_id"))
+	if errors.Is(err, store.ErrNotFound) {
+		writeError(w, http.StatusNotFound, "not found")
+		return
+	}
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "read failed")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"result":             "stored",
+		"event":              json.RawMessage(item.CanonicalJSON),
+		"payload_hash":       item.PayloadHash,
+		"server_received_at": item.ServerReceivedAt.UTC().Format(time.RFC3339Nano),
+	})
+}
+
+func (h *handler) events(w http.ResponseWriter, r *http.Request) {
+	items, err := h.store.ListEvents(r.Context(), 100)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "list failed")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"note":   "最近 100 条是可见性视图，不是丢失清单，也不是论文第四章的结果。",
+		"events": items,
+	})
+}
+
+func (h *handler) devices(w http.ResponseWriter, r *http.Request) {
+	items, err := h.store.DeviceStatuses(r.Context(), h.staleAfter)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "status failed")
 		return
 	}
 	writeJSON(w, http.StatusOK, items)
 }
 
-func (h *handler) createMeasurement(w http.ResponseWriter, r *http.Request) {
-	body, err := decodeMeasurementBody(w, r, true)
+func (h *handler) conflicts(w http.ResponseWriter, r *http.Request) {
+	items, err := h.store.Conflicts(r.Context(), 100)
 	if err != nil {
+		writeError(w, http.StatusInternalServerError, "conflicts failed")
 		return
 	}
-	item, err := h.store.CreateMeasurement(r.Context(), body.DeviceID, body.Input)
-	if err != nil {
-		writeStoreError(w, err)
-		return
-	}
-	writeJSON(w, http.StatusCreated, item)
+	writeJSON(w, http.StatusOK, items)
 }
 
-func (h *handler) getMeasurement(w http.ResponseWriter, r *http.Request) {
-	id, ok := pathID(w, r)
-	if !ok {
+func (h *handler) series(w http.ResponseWriter, r *http.Request) {
+	kind := r.URL.Query().Get("type")
+	if kind == "" {
+		writeError(w, http.StatusBadRequest, "type is required")
 		return
 	}
-	item, err := h.store.GetMeasurement(r.Context(), id)
+	points, err := h.store.Series(r.Context(), r.URL.Query().Get("device_id"), kind, 100)
 	if err != nil {
-		writeStoreError(w, err)
+		writeError(w, http.StatusInternalServerError, "series failed")
 		return
 	}
-	writeJSON(w, http.StatusOK, item)
+	writeJSON(w, http.StatusOK, points)
 }
 
-func (h *handler) updateMeasurement(w http.ResponseWriter, r *http.Request) {
-	id, ok := pathID(w, r)
-	if !ok {
-		return
-	}
-	body, err := decodeMeasurementBody(w, r, false)
+func (h *handler) exportJSON(w http.ResponseWriter, r *http.Request) {
+	items, err := h.store.ListAllEvents(r.Context())
 	if err != nil {
+		writeError(w, http.StatusInternalServerError, "export failed")
 		return
 	}
-	item, err := h.store.UpdateMeasurement(r.Context(), id, body.Input)
-	if err != nil {
-		writeStoreError(w, err)
-		return
-	}
-	writeJSON(w, http.StatusOK, item)
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	w.Header().Set("Content-Disposition", `attachment; filename="events.json"`)
+	_ = json.NewEncoder(w).Encode(map[string]any{
+		"note":   "Raw server receipt log. Not a Chapter 4 result.",
+		"events": items,
+	})
 }
 
-func (h *handler) deleteMeasurement(w http.ResponseWriter, r *http.Request) {
-	id, ok := pathID(w, r)
-	if !ok {
+func (h *handler) exportCSV(w http.ResponseWriter, r *http.Request) {
+	items, err := h.store.ListAllEvents(r.Context())
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "export failed")
 		return
 	}
-	if err := h.store.DeleteMeasurement(r.Context(), id); err != nil {
-		writeStoreError(w, err)
-		return
+	w.Header().Set("Content-Type", "text/csv; charset=utf-8")
+	w.Header().Set("Content-Disposition", `attachment; filename="events.csv"`)
+	cw := csv.NewWriter(w)
+	_ = cw.Write([]string{"server_received_at", "device_id", "event_id", "payload_hash", "measurement_type", "unit", "sensor_address", "sensor_kind", "sensor_model", "monotonic_us", "wall_time_utc", "clock_state", "operating_state", "values_json"})
+	for _, item := range items {
+		wall := ""
+		if item.Event.WallTimeUTC != nil {
+			wall = *item.Event.WallTimeUTC
+		}
+		values, _ := json.Marshal(item.Event.Values)
+		_ = cw.Write([]string{
+			item.ServerReceivedAt.UTC().Format(time.RFC3339Nano),
+			item.Event.DeviceID, item.Event.EventID, item.PayloadHash, item.Event.MeasurementType, item.Event.Unit,
+			item.Event.SensorAddress, item.Event.SensorKind, item.Event.SensorModel,
+			itoa(item.Event.MonotonicUS), wall, item.Event.ClockState, item.Event.OperatingState, string(values),
+		})
 	}
-	w.WriteHeader(http.StatusNoContent)
+	cw.Flush()
 }
 
-func (h *handler) sync(w http.ResponseWriter, r *http.Request) {
-	var body struct {
-		Device struct {
-			Name    string `json:"name"`
-			Kind    string `json:"kind"`
-			Address string `json:"address"`
-			Model   string `json:"model"`
-		} `json:"device"`
-		Measurements []measurementPayload `json:"measurements"`
-	}
-	if err := readJSON(w, r, &body); err != nil {
-		return
-	}
-	name, kind, address, model, err := normalizeDevice(body.Device.Name, body.Device.Kind, body.Device.Address, body.Device.Model)
+func (h *handler) exportReconciliation(w http.ResponseWriter, r *http.Request) {
+	stored, duplicates, conflicts, err := h.store.Counts(r.Context())
 	if err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
+		writeError(w, http.StatusInternalServerError, "reconciliation failed")
 		return
 	}
-	if len(body.Measurements) > maxSyncBatch {
-		writeError(w, http.StatusBadRequest, "too many measurements")
+	rows, err := h.store.Conflicts(r.Context(), 500)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "reconciliation failed")
 		return
 	}
-	items := make([]store.MeasurementInput, 0, len(body.Measurements))
-	for _, raw := range body.Measurements {
-		item, err := normalizeMeasurement(raw)
+	writeJSON(w, http.StatusOK, map[string]any{
+		"note": "Server-side receipt reconciliation. Duplicate and conflict counts are ingest attempts. This file does not estimate data loss and is not a Chapter 4 result.",
+		"counts": map[string]int{
+			"stored_events":  stored,
+			"duplicate_acks": duplicates,
+			"conflicts":      conflicts,
+		},
+		"conflicts": rows,
+	})
+}
+
+func (h *handler) reports(r *http.Request) (metrics.RQ1, metrics.RQ2, metrics.RQ3, metrics.RQ4, error) {
+	events, ledger, err := h.store.Evidence(r.Context())
+	if err != nil {
+		return metrics.RQ1{}, metrics.RQ2{}, metrics.RQ3{}, metrics.RQ4{}, err
+	}
+	stored, duplicates, conflicts, err := h.store.Counts(r.Context())
+	if err != nil {
+		return metrics.RQ1{}, metrics.RQ2{}, metrics.RQ3{}, metrics.RQ4{}, err
+	}
+	return metrics.SummarizeRQ1(events, ledger), metrics.SummarizeRQ2(events, ledger), metrics.SummarizeRQ3(stored, duplicates, conflicts), metrics.SummarizeRQ4(events), nil
+}
+
+func (h *handler) exportRQ1(w http.ResponseWriter, r *http.Request) {
+	rq1, _, _, _, err := h.reports(r)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "rq1 failed")
+		return
+	}
+	writeJSON(w, http.StatusOK, rq1)
+}
+
+func (h *handler) exportRQ2(w http.ResponseWriter, r *http.Request) {
+	_, rq2, _, _, err := h.reports(r)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "rq2 failed")
+		return
+	}
+	writeJSON(w, http.StatusOK, rq2)
+}
+
+func (h *handler) exportRQ3(w http.ResponseWriter, r *http.Request) {
+	_, _, rq3, _, err := h.reports(r)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "rq3 failed")
+		return
+	}
+	writeJSON(w, http.StatusOK, rq3)
+}
+
+func (h *handler) exportRQ4(w http.ResponseWriter, r *http.Request) {
+	_, _, _, rq4, err := h.reports(r)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "rq4 failed")
+		return
+	}
+	writeJSON(w, http.StatusOK, rq4)
+}
+
+func (h *handler) listGroundTruth(w http.ResponseWriter, r *http.Request) {
+	rows, err := h.store.ListGroundTruth(r.Context())
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "ledger failed")
+		return
+	}
+	writeJSON(w, http.StatusOK, rows)
+}
+
+func (h *handler) addGroundTruth(w http.ResponseWriter, r *http.Request) {
+	var body store.GroundTruth
+	if !decode(w, r, &body) {
+		return
+	}
+	if body.ObservedAt.IsZero() {
+		body.ObservedAt = time.Now().UTC()
+	}
+	if body.DeviceID == "" || body.MatchKey == "" || body.ReferenceType == "" || body.Observer == "" {
+		writeError(w, http.StatusBadRequest, "device_id, match_key, reference_type, and observer are required")
+		return
+	}
+	if err := h.store.AddGroundTruth(r.Context(), body); err != nil {
+		writeError(w, http.StatusBadRequest, "could not save ground truth")
+		return
+	}
+	writeJSON(w, http.StatusCreated, map[string]string{"status": "stored"})
+}
+
+func (h *handler) importGroundTruth(w http.ResponseWriter, r *http.Request) {
+	r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
+	rows, err := csv.NewReader(r.Body).ReadAll()
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid CSV")
+		return
+	}
+	saved := 0
+	for i, row := range rows {
+		if i == 0 && len(row) > 0 && row[0] == "device_id" {
+			continue
+		}
+		if len(row) < 6 {
+			continue
+		}
+		observed, err := time.Parse(time.RFC3339, row[4])
 		if err != nil {
-			writeError(w, http.StatusBadRequest, err.Error())
+			writeError(w, http.StatusBadRequest, "observed_at must be RFC3339")
 			return
 		}
-		items = append(items, item)
+		notes := ""
+		if len(row) > 6 {
+			notes = row[6]
+		}
+		if err := h.store.AddGroundTruth(r.Context(), store.GroundTruth{
+			DeviceID: row[0], MatchKey: row[1], ReferenceType: row[2], ReferenceValue: row[3],
+			ObservedAt: observed, Observer: row[5], Notes: notes,
+		}); err != nil {
+			writeError(w, http.StatusBadRequest, "could not import a row")
+			return
+		}
+		saved++
 	}
-	result, err := h.store.SyncDeviceMeasurements(r.Context(), name, kind, address, model, items)
-	if err != nil {
-		writeStoreError(w, err)
+	writeJSON(w, http.StatusCreated, map[string]int{"imported": saved})
+}
+
+func (h *handler) createUser(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Username string `json:"username"`
+		Password string `json:"password"`
+		Role     string `json:"role"`
+	}
+	if !decode(w, r, &body) {
 		return
 	}
-	writeJSON(w, http.StatusOK, result)
-}
-
-type devicePayload struct {
-	Name    string `json:"name"`
-	Kind    string `json:"kind"`
-	Address string `json:"address"`
-	Model   string `json:"model"`
-}
-
-type measurementPayload struct {
-	Type       string          `json:"type"`
-	Unit       string          `json:"unit"`
-	RecordedAt time.Time       `json:"recorded_at"`
-	Values     json.RawMessage `json:"values"`
-}
-
-type measurementBody struct {
-	DeviceID int64 `json:"device_id"`
-	measurementPayload
-	Input store.MeasurementInput
-}
-
-func decodeDevice(w http.ResponseWriter, r *http.Request) (devicePayload, error) {
-	var body devicePayload
-	if err := readJSON(w, r, &body); err != nil {
-		return devicePayload{}, err
+	if len(body.Password) < 8 {
+		writeError(w, http.StatusBadRequest, "password must be at least 8 characters")
+		return
 	}
-	name, kind, address, model, err := normalizeDevice(body.Name, body.Kind, body.Address, body.Model)
+	if err := h.store.CreateUser(r.Context(), strings.TrimSpace(body.Username), body.Password, body.Role, 0); err != nil {
+		writeError(w, http.StatusBadRequest, "could not create user")
+		return
+	}
+	writeJSON(w, http.StatusCreated, map[string]string{"username": body.Username, "role": body.Role})
+}
+
+func (h *handler) createDevice(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		DeviceID string `json:"device_id"`
+		Name     string `json:"name"`
+	}
+	if !decode(w, r, &body) {
+		return
+	}
+	if err := h.store.UpsertDevice(r.Context(), strings.TrimSpace(body.DeviceID), strings.TrimSpace(body.Name)); err != nil {
+		writeError(w, http.StatusBadRequest, "could not save device")
+		return
+	}
+	writeJSON(w, http.StatusCreated, map[string]string{"device_id": body.DeviceID, "name": body.Name})
+}
+
+func (h *handler) createToken(w http.ResponseWriter, r *http.Request) {
+	token, err := h.store.IssueDeviceToken(r.Context(), chi.URLParam(r, "device_id"))
+	if errors.Is(err, store.ErrNotFound) {
+		writeError(w, http.StatusNotFound, "device not found")
+		return
+	}
 	if err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
-		return devicePayload{}, err
+		writeError(w, http.StatusInternalServerError, "token failed")
+		return
 	}
-	body.Name, body.Kind, body.Address, body.Model = name, kind, address, model
-	return body, nil
+	writeJSON(w, http.StatusCreated, map[string]string{
+		"token": token,
+		"note":  "Store this token on the collector. It is not shown again.",
+	})
 }
 
-func decodeMeasurementBody(w http.ResponseWriter, r *http.Request, requireDevice bool) (measurementBody, error) {
-	var body measurementBody
-	if err := readJSON(w, r, &body); err != nil {
-		return measurementBody{}, err
+func (h *handler) requireUser(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		user, ok := h.userIfAny(r)
+		if !ok {
+			writeError(w, http.StatusUnauthorized, "login required")
+			return
+		}
+		next.ServeHTTP(w, r.WithContext(withPrincipal(r.Context(), user)))
+	})
+}
+
+func (h *handler) requireAdmin(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		user, _ := principalFrom(r.Context())
+		if user.role != "admin" {
+			writeError(w, http.StatusForbidden, "admin required")
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+func (h *handler) devicePrincipal(w http.ResponseWriter, r *http.Request) (string, bool) {
+	token := bearer(r)
+	if token == "" {
+		writeError(w, http.StatusUnauthorized, "device token required")
+		return "", false
 	}
-	if requireDevice && body.DeviceID <= 0 {
-		writeError(w, http.StatusBadRequest, "device_id is required")
-		return measurementBody{}, errors.New("device_id is required")
-	}
-	item, err := normalizeMeasurement(body.measurementPayload)
+	deviceID, err := h.store.DeviceByToken(r.Context(), token)
 	if err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
-		return measurementBody{}, err
+		writeError(w, http.StatusUnauthorized, "device token rejected")
+		return "", false
 	}
-	body.Input = item
-	return body, nil
+	return deviceID, true
 }
 
-func normalizeDevice(name, kind, address, model string) (string, string, string, string, error) {
-	name, kind, model, err := normalizeDeviceUpdate(name, kind, model)
+func (h *handler) userIfAny(r *http.Request) (principal, bool) {
+	token := bearer(r)
+	if token == "" {
+		return principal{}, false
+	}
+	user, err := h.store.UserByToken(r.Context(), token)
 	if err != nil {
-		return "", "", "", "", err
+		return principal{}, false
 	}
-	address = strings.TrimSpace(address)
-	if address == "" || len(address) > 80 {
-		return "", "", "", "", errors.New("address is required")
-	}
-	return name, kind, address, model, nil
+	return principal{role: user.Role}, true
 }
 
-func normalizeDeviceUpdate(name, kind, model string) (string, string, string, error) {
-	name = strings.TrimSpace(name)
-	kind = strings.TrimSpace(kind)
-	model = strings.TrimSpace(model)
-	if name == "" || len(name) > 80 {
-		return "", "", "", errors.New("name is required")
+func bearer(r *http.Request) string {
+	value := r.Header.Get("Authorization")
+	const prefix = "Bearer "
+	if !strings.HasPrefix(value, prefix) {
+		return ""
 	}
-	if _, ok := deviceKinds[kind]; !ok {
-		return "", "", "", errors.New("kind must be blood_pressure, heart_rate, or ring")
-	}
-	if len(model) > 80 {
-		return "", "", "", errors.New("model is too long")
-	}
-	return name, kind, model, nil
+	return strings.TrimSpace(strings.TrimPrefix(value, prefix))
 }
 
-func normalizeMeasurement(raw measurementPayload) (store.MeasurementInput, error) {
-	raw.Type = strings.TrimSpace(raw.Type)
-	raw.Unit = strings.TrimSpace(raw.Unit)
-	if _, ok := measurementTypes[raw.Type]; !ok {
-		return store.MeasurementInput{}, errors.New("unknown measurement type")
-	}
-	if raw.Unit == "" || len(raw.Unit) > 16 {
-		return store.MeasurementInput{}, errors.New("unit is required")
-	}
-	if raw.RecordedAt.IsZero() {
-		return store.MeasurementInput{}, errors.New("recorded_at is required")
-	}
-	trimmed := strings.TrimSpace(string(raw.Values))
-	if trimmed == "" || !json.Valid([]byte(trimmed)) || trimmed[0] != '{' {
-		return store.MeasurementInput{}, errors.New("values must be a JSON object")
-	}
-	return store.MeasurementInput{
-		Type:       raw.Type,
-		Unit:       raw.Unit,
-		RecordedAt: raw.RecordedAt.UTC(),
-		Values:     raw.Values,
-	}, nil
-}
-
-func measurementFilter(r *http.Request) (store.MeasurementFilter, error) {
-	var filter store.MeasurementFilter
-	q := r.URL.Query()
-	if raw := q.Get("device_id"); raw != "" {
-		id, err := strconv.ParseInt(raw, 10, 64)
-		if err != nil || id <= 0 {
-			return filter, errors.New("invalid device_id")
-		}
-		filter.DeviceID = &id
-	}
-	filter.Type = strings.TrimSpace(q.Get("type"))
-	if filter.Type != "" {
-		if _, ok := measurementTypes[filter.Type]; !ok {
-			return filter, errors.New("unknown measurement type")
-		}
-	}
-	if raw := q.Get("from"); raw != "" {
-		t, err := time.Parse(time.RFC3339, raw)
-		if err != nil {
-			return filter, errors.New("invalid from")
-		}
-		filter.From = &t
-	}
-	if raw := q.Get("to"); raw != "" {
-		t, err := time.Parse(time.RFC3339, raw)
-		if err != nil {
-			return filter, errors.New("invalid to")
-		}
-		filter.To = &t
-	}
-	if raw := q.Get("limit"); raw != "" {
-		n, err := strconv.Atoi(raw)
-		if err != nil || n <= 0 {
-			return filter, errors.New("invalid limit")
-		}
-		filter.Limit = n
-	}
-	return filter, nil
-}
-
-func pathID(w http.ResponseWriter, r *http.Request) (int64, bool) {
-	id, err := strconv.ParseInt(chi.URLParam(r, "id"), 10, 64)
-	if err != nil || id <= 0 {
-		writeError(w, http.StatusBadRequest, "invalid id")
-		return 0, false
-	}
-	return id, true
-}
-
-func readJSON(w http.ResponseWriter, r *http.Request, dest any) error {
+func decode(w http.ResponseWriter, r *http.Request, dest any) bool {
 	r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
-	dec := json.NewDecoder(r.Body)
-	if err := dec.Decode(dest); err != nil {
+	if err := json.NewDecoder(r.Body).Decode(dest); err != nil && !errors.Is(err, io.EOF) {
 		writeError(w, http.StatusBadRequest, "invalid JSON")
-		return err
+		return false
 	}
-	return nil
-}
-
-func writeStoreError(w http.ResponseWriter, err error) {
-	switch {
-	case errors.Is(err, store.ErrNotFound):
-		writeError(w, http.StatusNotFound, "not found")
-	case strings.Contains(err.Error(), "already exists"):
-		writeError(w, http.StatusConflict, err.Error())
-	default:
-		writeError(w, http.StatusInternalServerError, "request failed")
-	}
+	return true
 }
 
 func writeError(w http.ResponseWriter, status int, msg string) {
@@ -448,12 +530,51 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 func cors(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Access-Control-Allow-Origin", "*")
-		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
-		w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
+		w.Header().Set("Access-Control-Allow-Headers", "Authorization, Content-Type")
+		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
 		if r.Method == http.MethodOptions {
 			w.WriteHeader(http.StatusNoContent)
 			return
 		}
 		next.ServeHTTP(w, r)
 	})
+}
+
+type ctxKey int
+
+const principalKey ctxKey = 1
+
+func withPrincipal(ctx context.Context, user principal) context.Context {
+	return context.WithValue(ctx, principalKey, user)
+}
+
+func principalFrom(ctx context.Context) (principal, bool) {
+	user, ok := ctx.Value(principalKey).(principal)
+	return user, ok
+}
+
+func itoa(value int64) string {
+	return strconvFormat(value)
+}
+
+func strconvFormat(value int64) string {
+	if value == 0 {
+		return "0"
+	}
+	var buf [20]byte
+	i := len(buf)
+	neg := value < 0
+	if neg {
+		value = -value
+	}
+	for value > 0 {
+		i--
+		buf[i] = byte('0' + value%10)
+		value /= 10
+	}
+	if neg {
+		i--
+		buf[i] = '-'
+	}
+	return string(buf[i:])
 }

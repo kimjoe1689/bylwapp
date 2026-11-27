@@ -23,11 +23,11 @@ func TestUpIsIdempotent(t *testing.T) {
 	if n != 1 {
 		t.Fatalf("migrations applied = %d, want 1", n)
 	}
-	if err := db.QueryRow(`SELECT COUNT(1) FROM sqlite_master WHERE type = 'table' AND name = 'measurements'`).Scan(&n); err != nil {
+	if err := db.QueryRow(`SELECT COUNT(1) FROM sqlite_master WHERE type = 'table' AND name = 'events'`).Scan(&n); err != nil {
 		t.Fatal(err)
 	}
 	if n != 1 {
-		t.Fatal("measurements table missing")
+		t.Fatal("events table missing")
 	}
 }
 

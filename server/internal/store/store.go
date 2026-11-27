@@ -1,82 +1,83 @@
-// Package store persists devices and health measurements in SQLite.
 package store
 
 import (
 	"context"
+	"crypto/rand"
+	"crypto/sha256"
 	"database/sql"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"os"
 	"path/filepath"
-	"strings"
 	"time"
 
+	"github.com/kimjoe1689/bylwapp/server/schema"
+	"golang.org/x/crypto/bcrypt"
 	_ "modernc.org/sqlite"
 )
 
-// ErrNotFound is returned when a row does not exist.
 var ErrNotFound = errors.New("not found")
+var ErrConflict = errors.New("conflict")
 
-// Device is a BLE health device known to the admin server.
+type Store struct{ db *sql.DB }
+
+type User struct {
+	ID       int64  `json:"id"`
+	Username string `json:"username"`
+	Role     string `json:"role"`
+}
+
 type Device struct {
-	ID        int64     `json:"id"`
+	DeviceID  string    `json:"device_id"`
 	Name      string    `json:"name"`
-	Kind      string    `json:"kind"`
-	Address   string    `json:"address"`
-	Model     string    `json:"model"`
 	CreatedAt time.Time `json:"created_at"`
-	UpdatedAt time.Time `json:"updated_at"`
 }
 
-// Measurement is one uploaded health sample.
-type Measurement struct {
-	ID            int64           `json:"id"`
-	DeviceID      int64           `json:"device_id"`
-	DeviceName    string          `json:"device_name"`
-	DeviceAddress string          `json:"device_address"`
-	DeviceKind    string          `json:"device_kind"`
-	DeviceModel   string          `json:"device_model"`
-	Type          string          `json:"type"`
-	Unit          string          `json:"unit"`
-	RecordedAt    time.Time       `json:"recorded_at"`
-	Values        json.RawMessage `json:"values"`
-	CreatedAt     time.Time       `json:"created_at"`
+type StoredEvent struct {
+	Event            schema.Event `json:"event"`
+	PayloadHash      string       `json:"payload_hash"`
+	CanonicalJSON    string       `json:"canonical_json"`
+	ServerReceivedAt time.Time    `json:"server_received_at"`
 }
 
-// MeasurementInput is the payload used to insert a measurement.
-type MeasurementInput struct {
-	Type       string
-	Unit       string
-	RecordedAt time.Time
-	Values     json.RawMessage
+type IngestOutcome struct {
+	Result           string    `json:"result"`
+	PayloadHash      string    `json:"payload_hash"`
+	ServerReceivedAt time.Time `json:"server_received_at"`
 }
 
-// MeasurementFilter narrows list queries.
-type MeasurementFilter struct {
-	DeviceID *int64
-	Type     string
-	From     *time.Time
-	To       *time.Time
-	Limit    int
+type DeviceStatus struct {
+	DeviceID       string     `json:"device_id"`
+	Name           string     `json:"name"`
+	LastReceivedAt *time.Time `json:"last_received_at"`
+	Stale          bool       `json:"stale"`
+	OperatingState string     `json:"operating_state"`
+	SensorAddress  string     `json:"sensor_address"`
+	SensorKind     string     `json:"sensor_kind"`
+	SensorModel    string     `json:"sensor_model"`
+	OpenConflicts  int        `json:"open_conflicts"`
+	DuplicateAcks  int        `json:"duplicate_acks"`
+	EventCount     int        `json:"event_count"`
 }
 
-// SyncResult reports how a batch upload was applied.
-type SyncResult struct {
-	DeviceID int64 `json:"device_id"`
-	Inserted int   `json:"inserted"`
-	Skipped  int   `json:"skipped"`
+type ConflictRow struct {
+	DeviceID      string    `json:"device_id"`
+	EventID       string    `json:"event_id"`
+	StoredHash    string    `json:"stored_hash"`
+	PresentedHash string    `json:"presented_hash"`
+	At            time.Time `json:"at"`
 }
 
-// Store is a SQLite-backed repository.
-type Store struct {
-	db *sql.DB
+type SeriesPoint struct {
+	At    time.Time `json:"at"`
+	Value float64   `json:"value"`
+	Label string    `json:"label"`
 }
 
-// Open creates parent directories and opens the database.
 func Open(path string) (*Store, error) {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		return nil, fmt.Errorf("create db directory: %w", err)
+		return nil, err
 	}
 	db, err := sql.Open("sqlite", path)
 	if err != nil {
@@ -86,7 +87,7 @@ func Open(path string) (*Store, error) {
 	var mode string
 	if err := db.QueryRow(`PRAGMA journal_mode = WAL`).Scan(&mode); err != nil {
 		_ = db.Close()
-		return nil, fmt.Errorf("enable wal: %w", err)
+		return nil, err
 	}
 	if _, err := db.Exec(`PRAGMA foreign_keys = ON`); err != nil {
 		_ = db.Close()
@@ -96,314 +97,416 @@ func Open(path string) (*Store, error) {
 		_ = db.Close()
 		return nil, err
 	}
-	if err := db.Ping(); err != nil {
-		_ = db.Close()
-		return nil, err
-	}
-	return &Store{db: db}, nil
+	return &Store{db: db}, db.Ping()
 }
 
-// Close closes the database.
-func (s *Store) Close() error { return s.db.Close() }
-
-// Ping checks that the database is reachable.
+func (s *Store) Close() error                   { return s.db.Close() }
+func (s *Store) DB() *sql.DB                    { return s.db }
 func (s *Store) Ping(ctx context.Context) error { return s.db.PingContext(ctx) }
 
-// DB exposes the handle for migrations.
-func (s *Store) DB() *sql.DB { return s.db }
-
-// UpsertDevice inserts a device or updates its name, kind, and model by address.
-func (s *Store) UpsertDevice(ctx context.Context, name, kind, address, model string) (Device, error) {
-	now := formatTime(time.Now())
-	row := s.db.QueryRowContext(ctx, `
-		INSERT INTO devices(name, kind, address, model, created_at, updated_at)
-		VALUES (?, ?, ?, ?, ?, ?)
-		ON CONFLICT(address) DO UPDATE SET
-			name = excluded.name,
-			kind = excluded.kind,
-			model = excluded.model,
-			updated_at = excluded.updated_at
-		RETURNING id, name, kind, address, model, created_at, updated_at
-	`, name, kind, address, model, now, now)
-	return scanDevice(row)
+func (s *Store) CountUsers(ctx context.Context) (int, error) {
+	var n int
+	err := s.db.QueryRowContext(ctx, `SELECT COUNT(1) FROM users`).Scan(&n)
+	return n, err
 }
 
-// CreateDevice inserts a device and rejects a duplicate address.
-func (s *Store) CreateDevice(ctx context.Context, name, kind, address, model string) (Device, error) {
-	now := formatTime(time.Now())
-	row := s.db.QueryRowContext(ctx, `
-		INSERT INTO devices(name, kind, address, model, created_at, updated_at)
-		VALUES (?, ?, ?, ?, ?, ?)
-		RETURNING id, name, kind, address, model, created_at, updated_at
-	`, name, kind, address, model, now, now)
-	device, err := scanDevice(row)
-	if err != nil && strings.Contains(err.Error(), "UNIQUE") {
-		return Device{}, fmt.Errorf("device address already exists")
+func (s *Store) CreateUser(ctx context.Context, username, password, role string, cost int) error {
+	if role != "admin" && role != "caregiver" {
+		return errors.New("invalid role")
 	}
-	return device, err
+	if cost == 0 {
+		cost = bcrypt.DefaultCost
+	}
+	hash, err := bcrypt.GenerateFromPassword([]byte(password), cost)
+	if err != nil {
+		return err
+	}
+	_, err = s.db.ExecContext(ctx, `INSERT INTO users(username, password_hash, role, created_at) VALUES (?, ?, ?, ?)`,
+		username, string(hash), role, now())
+	return err
 }
 
-// UpdateDevice changes mutable device fields.
-func (s *Store) UpdateDevice(ctx context.Context, id int64, name, kind, model string) (Device, error) {
-	row := s.db.QueryRowContext(ctx, `
-		UPDATE devices
-		SET name = ?, kind = ?, model = ?, updated_at = ?
-		WHERE id = ?
-		RETURNING id, name, kind, address, model, created_at, updated_at
-	`, name, kind, model, formatTime(time.Now()), id)
-	device, err := scanDevice(row)
+func (s *Store) Login(ctx context.Context, username, password string, ttl time.Duration) (string, User, error) {
+	var user User
+	var hash string
+	err := s.db.QueryRowContext(ctx, `SELECT id, username, role, password_hash FROM users WHERE username = ?`, username).
+		Scan(&user.ID, &user.Username, &user.Role, &hash)
 	if errors.Is(err, sql.ErrNoRows) {
-		return Device{}, ErrNotFound
+		return "", User{}, ErrNotFound
 	}
-	return device, err
+	if err != nil {
+		return "", User{}, err
+	}
+	if bcrypt.CompareHashAndPassword([]byte(hash), []byte(password)) != nil {
+		return "", User{}, ErrNotFound
+	}
+	token, tokenHash, err := newToken()
+	if err != nil {
+		return "", User{}, err
+	}
+	_, err = s.db.ExecContext(ctx, `INSERT INTO sessions(token_hash, user_id, expires_at) VALUES (?, ?, ?)`,
+		tokenHash, user.ID, time.Now().UTC().Add(ttl).Format(time.RFC3339Nano))
+	return token, user, err
 }
 
-// GetDevice loads one device.
-func (s *Store) GetDevice(ctx context.Context, id int64) (Device, error) {
-	row := s.db.QueryRowContext(ctx, `
-		SELECT id, name, kind, address, model, created_at, updated_at
-		FROM devices WHERE id = ?
-	`, id)
-	device, err := scanDevice(row)
+func (s *Store) UserByToken(ctx context.Context, token string) (User, error) {
+	var user User
+	var expires string
+	err := s.db.QueryRowContext(ctx, `
+		SELECT u.id, u.username, u.role, s.expires_at
+		FROM sessions s JOIN users u ON u.id = s.user_id
+		WHERE s.token_hash = ?`, hashToken(token)).Scan(&user.ID, &user.Username, &user.Role, &expires)
 	if errors.Is(err, sql.ErrNoRows) {
-		return Device{}, ErrNotFound
+		return User{}, ErrNotFound
 	}
-	return device, err
+	if err != nil {
+		return User{}, err
+	}
+	exp, err := time.Parse(time.RFC3339Nano, expires)
+	if err != nil || time.Now().After(exp) {
+		return User{}, ErrNotFound
+	}
+	return user, nil
 }
 
-// ListDevices returns devices ordered by most recently updated.
+func (s *Store) UpsertDevice(ctx context.Context, id, name string) error {
+	_, err := s.db.ExecContext(ctx, `
+		INSERT INTO devices(device_id, name, created_at) VALUES (?, ?, ?)
+		ON CONFLICT(device_id) DO UPDATE SET name = excluded.name`, id, name, now())
+	return err
+}
+
+func (s *Store) IssueDeviceToken(ctx context.Context, deviceID string) (string, error) {
+	var n int
+	if err := s.db.QueryRowContext(ctx, `SELECT COUNT(1) FROM devices WHERE device_id = ?`, deviceID).Scan(&n); err != nil {
+		return "", err
+	}
+	if n == 0 {
+		return "", ErrNotFound
+	}
+	token, tokenHash, err := newToken()
+	if err != nil {
+		return "", err
+	}
+	_, err = s.db.ExecContext(ctx, `INSERT INTO device_tokens(token_hash, device_id, created_at) VALUES (?, ?, ?)`,
+		tokenHash, deviceID, now())
+	return token, err
+}
+
+func (s *Store) DeviceByToken(ctx context.Context, token string) (string, error) {
+	var deviceID string
+	var revoked sql.NullString
+	err := s.db.QueryRowContext(ctx, `SELECT device_id, revoked_at FROM device_tokens WHERE token_hash = ?`, hashToken(token)).
+		Scan(&deviceID, &revoked)
+	if errors.Is(err, sql.ErrNoRows) || revoked.Valid {
+		return "", ErrNotFound
+	}
+	return deviceID, err
+}
+
 func (s *Store) ListDevices(ctx context.Context) ([]Device, error) {
-	rows, err := s.db.QueryContext(ctx, `
-		SELECT id, name, kind, address, model, created_at, updated_at
-		FROM devices ORDER BY updated_at DESC, id DESC
-	`)
+	rows, err := s.db.QueryContext(ctx, `SELECT device_id, name, created_at FROM devices ORDER BY device_id`)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	var out []Device
+	out := []Device{}
 	for rows.Next() {
-		device, err := scanDevice(rows)
-		if err != nil {
+		var d Device
+		var created string
+		if err := rows.Scan(&d.DeviceID, &d.Name, &created); err != nil {
 			return nil, err
 		}
-		out = append(out, device)
-	}
-	if out == nil {
-		out = []Device{}
+		d.CreatedAt, _ = time.Parse(time.RFC3339Nano, created)
+		out = append(out, d)
 	}
 	return out, rows.Err()
 }
 
-// DeleteDevice removes a device and its measurements.
-func (s *Store) DeleteDevice(ctx context.Context, id int64) error {
-	res, err := s.db.ExecContext(ctx, `DELETE FROM devices WHERE id = ?`, id)
+// Ingest inserts the first receipt or records a duplicate/conflict without replacing it.
+func (s *Store) Ingest(ctx context.Context, event schema.Event, hash, canonical string) (IngestOutcome, error) {
+	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
-		return err
+		return IngestOutcome{}, err
 	}
-	n, err := res.RowsAffected()
-	if err != nil {
-		return err
-	}
-	if n == 0 {
-		return ErrNotFound
-	}
-	return nil
-}
-
-// CreateMeasurement inserts one measurement for an existing device.
-func (s *Store) CreateMeasurement(ctx context.Context, deviceID int64, in MeasurementInput) (Measurement, error) {
-	if _, err := s.GetDevice(ctx, deviceID); err != nil {
-		return Measurement{}, err
-	}
-	res, err := s.db.ExecContext(ctx, `
-		INSERT INTO measurements(device_id, type, unit, recorded_at, values_json, created_at)
-		VALUES (?, ?, ?, ?, ?, ?)
-	`, deviceID, in.Type, in.Unit, formatTime(in.RecordedAt), string(in.Values), formatTime(time.Now()))
-	if err != nil {
-		if strings.Contains(err.Error(), "UNIQUE") {
-			return Measurement{}, fmt.Errorf("measurement already exists")
-		}
-		return Measurement{}, err
-	}
-	id, err := res.LastInsertId()
-	if err != nil {
-		return Measurement{}, err
-	}
-	return s.GetMeasurement(ctx, id)
-}
-
-// SyncDeviceMeasurements upserts the device and inserts measurements, skipping duplicates.
-func (s *Store) SyncDeviceMeasurements(ctx context.Context, name, kind, address, model string, items []MeasurementInput) (SyncResult, error) {
-	device, err := s.UpsertDevice(ctx, name, kind, address, model)
-	if err != nil {
-		return SyncResult{}, err
-	}
-	result := SyncResult{DeviceID: device.ID}
-	for _, item := range items {
-		res, err := s.db.ExecContext(ctx, `
-			INSERT INTO measurements(device_id, type, unit, recorded_at, values_json, created_at)
-			VALUES (?, ?, ?, ?, ?, ?)
-			ON CONFLICT(device_id, type, recorded_at) DO NOTHING
-		`, device.ID, item.Type, item.Unit, formatTime(item.RecordedAt), string(item.Values), formatTime(time.Now()))
-		if err != nil {
-			return SyncResult{}, err
-		}
-		n, err := res.RowsAffected()
-		if err != nil {
-			return SyncResult{}, err
-		}
-		if n == 0 {
-			result.Skipped++
-		} else {
-			result.Inserted++
-		}
-	}
-	return result, nil
-}
-
-// GetMeasurement loads one measurement.
-func (s *Store) GetMeasurement(ctx context.Context, id int64) (Measurement, error) {
-	row := s.db.QueryRowContext(ctx, measurementSelect+` WHERE m.id = ?`, id)
-	item, err := scanMeasurement(row)
+	defer func() { _ = tx.Rollback() }()
+	var storedHash, received string
+	err = tx.QueryRowContext(ctx, `SELECT payload_hash, server_received_at FROM events WHERE device_id = ? AND event_id = ?`,
+		event.DeviceID, event.EventID).Scan(&storedHash, &received)
 	if errors.Is(err, sql.ErrNoRows) {
-		return Measurement{}, ErrNotFound
+		received = now()
+		_, err = tx.ExecContext(ctx, `
+			INSERT INTO events(device_id, event_id, payload_hash, canonical_json, server_received_at,
+				measurement_type, unit, sensor_address, sensor_kind, sensor_model, monotonic_us,
+				wall_time_utc, clock_state, operating_state, values_json)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			event.DeviceID, event.EventID, hash, canonical, received,
+			event.MeasurementType, event.Unit, event.SensorAddress, event.SensorKind, event.SensorModel,
+			event.MonotonicUS, nullable(event.WallTimeUTC), event.ClockState, event.OperatingState, mustValues(event.Values))
+		if err != nil {
+			return IngestOutcome{}, err
+		}
+		if err := logIngest(ctx, tx, event.DeviceID, event.EventID, "stored", hash, hash, received); err != nil {
+			return IngestOutcome{}, err
+		}
+		if err := tx.Commit(); err != nil {
+			return IngestOutcome{}, err
+		}
+		at, _ := time.Parse(time.RFC3339Nano, received)
+		return IngestOutcome{Result: "stored", PayloadHash: hash, ServerReceivedAt: at}, nil
 	}
-	return item, err
+	if err != nil {
+		return IngestOutcome{}, err
+	}
+	result := "duplicate"
+	if storedHash != hash {
+		result = "conflict"
+	}
+	at := now()
+	if err := logIngest(ctx, tx, event.DeviceID, event.EventID, result, hash, storedHash, at); err != nil {
+		return IngestOutcome{}, err
+	}
+	if err := tx.Commit(); err != nil {
+		return IngestOutcome{}, err
+	}
+	parsed, _ := time.Parse(time.RFC3339Nano, received)
+	return IngestOutcome{Result: result, PayloadHash: storedHash, ServerReceivedAt: parsed}, nil
 }
 
-// ListMeasurements returns measurements matching the filter, newest first.
-func (s *Store) ListMeasurements(ctx context.Context, filter MeasurementFilter) ([]Measurement, error) {
-	limit := filter.Limit
+func (s *Store) GetEvent(ctx context.Context, deviceID, eventID string) (StoredEvent, error) {
+	row := s.db.QueryRowContext(ctx, `SELECT canonical_json, payload_hash, server_received_at FROM events WHERE device_id = ? AND event_id = ?`, deviceID, eventID)
+	var body, hash, received string
+	if err := row.Scan(&body, &hash, &received); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return StoredEvent{}, ErrNotFound
+		}
+		return StoredEvent{}, err
+	}
+	var event schema.Event
+	if err := json.Unmarshal([]byte(body), &event); err != nil {
+		return StoredEvent{}, err
+	}
+	at, _ := time.Parse(time.RFC3339Nano, received)
+	return StoredEvent{Event: event, PayloadHash: hash, CanonicalJSON: body, ServerReceivedAt: at}, nil
+}
+
+func (s *Store) ListEvents(ctx context.Context, limit int) ([]StoredEvent, error) {
 	if limit <= 0 || limit > 500 {
 		limit = 100
 	}
-	query := measurementSelect + ` WHERE 1=1`
-	args := make([]any, 0, 5)
-	if filter.DeviceID != nil {
-		query += ` AND m.device_id = ?`
-		args = append(args, *filter.DeviceID)
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT canonical_json, payload_hash, server_received_at
+		FROM events ORDER BY server_received_at DESC, event_id DESC LIMIT ?`, limit)
+	if err != nil {
+		return nil, err
 	}
-	if filter.Type != "" {
-		query += ` AND m.type = ?`
-		args = append(args, filter.Type)
+	defer rows.Close()
+	return scanEvents(rows)
+}
+
+func (s *Store) ListAllEvents(ctx context.Context) ([]StoredEvent, error) {
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT canonical_json, payload_hash, server_received_at
+		FROM events ORDER BY server_received_at ASC, event_id ASC`)
+	if err != nil {
+		return nil, err
 	}
-	if filter.From != nil {
-		query += ` AND m.recorded_at >= ?`
-		args = append(args, formatTime(*filter.From))
+	defer rows.Close()
+	return scanEvents(rows)
+}
+
+func (s *Store) DeviceStatuses(ctx context.Context, staleAfter time.Duration) ([]DeviceStatus, error) {
+	devices, err := s.ListDevices(ctx)
+	if err != nil {
+		return nil, err
 	}
-	if filter.To != nil {
-		query += ` AND m.recorded_at <= ?`
-		args = append(args, formatTime(*filter.To))
+	out := make([]DeviceStatus, 0, len(devices))
+	for _, device := range devices {
+		status := DeviceStatus{DeviceID: device.DeviceID, Name: device.Name, OperatingState: ""}
+		var received, operating, address, kind, model sql.NullString
+		err := s.db.QueryRowContext(ctx, `
+			SELECT server_received_at, operating_state, sensor_address, sensor_kind, sensor_model
+			FROM events WHERE device_id = ? ORDER BY server_received_at DESC LIMIT 1`, device.DeviceID).
+			Scan(&received, &operating, &address, &kind, &model)
+		if err == nil {
+			at, _ := time.Parse(time.RFC3339Nano, received.String)
+			status.LastReceivedAt = &at
+			status.Stale = time.Since(at) > staleAfter
+			status.OperatingState = operating.String
+			status.SensorAddress = address.String
+			status.SensorKind = kind.String
+			status.SensorModel = model.String
+		} else if !errors.Is(err, sql.ErrNoRows) {
+			return nil, err
+		} else {
+			status.Stale = true
+		}
+		if err := s.db.QueryRowContext(ctx, `SELECT COUNT(1) FROM events WHERE device_id = ?`, device.DeviceID).Scan(&status.EventCount); err != nil {
+			return nil, err
+		}
+		if err := s.db.QueryRowContext(ctx, `SELECT COUNT(1) FROM ingest_log WHERE device_id = ? AND result = 'conflict'`, device.DeviceID).Scan(&status.OpenConflicts); err != nil {
+			return nil, err
+		}
+		if err := s.db.QueryRowContext(ctx, `SELECT COUNT(1) FROM ingest_log WHERE device_id = ? AND result = 'duplicate'`, device.DeviceID).Scan(&status.DuplicateAcks); err != nil {
+			return nil, err
+		}
+		out = append(out, status)
 	}
-	query += ` ORDER BY m.recorded_at DESC, m.id DESC LIMIT ?`
+	return out, nil
+}
+
+func (s *Store) Conflicts(ctx context.Context, limit int) ([]ConflictRow, error) {
+	if limit <= 0 {
+		limit = 100
+	}
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT device_id, event_id, stored_hash, presented_hash, at
+		FROM ingest_log WHERE result = 'conflict' ORDER BY id DESC LIMIT ?`, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []ConflictRow{}
+	for rows.Next() {
+		var row ConflictRow
+		var at string
+		if err := rows.Scan(&row.DeviceID, &row.EventID, &row.StoredHash, &row.PresentedHash, &at); err != nil {
+			return nil, err
+		}
+		row.At, _ = time.Parse(time.RFC3339Nano, at)
+		out = append(out, row)
+	}
+	return out, rows.Err()
+}
+
+func (s *Store) Series(ctx context.Context, deviceID, measurementType string, limit int) ([]SeriesPoint, error) {
+	if limit <= 0 || limit > 500 {
+		limit = 100
+	}
+	query := `
+		SELECT server_received_at, values_json, measurement_type
+		FROM events WHERE measurement_type = ?`
+	args := []any{measurementType}
+	if deviceID != "" {
+		query += ` AND device_id = ?`
+		args = append(args, deviceID)
+	}
+	query += ` ORDER BY server_received_at DESC LIMIT ?`
 	args = append(args, limit)
 	rows, err := s.db.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	out := []Measurement{}
+	out := []SeriesPoint{}
 	for rows.Next() {
-		item, err := scanMeasurement(rows)
-		if err != nil {
+		var at, values string
+		var kind string
+		if err := rows.Scan(&at, &values, &kind); err != nil {
 			return nil, err
 		}
-		out = append(out, item)
+		parsed, _ := time.Parse(time.RFC3339Nano, at)
+		var payload map[string]any
+		_ = json.Unmarshal([]byte(values), &payload)
+		value, label := seriesValue(kind, payload)
+		out = append(out, SeriesPoint{At: parsed, Value: value, Label: label})
 	}
 	return out, rows.Err()
 }
 
-// UpdateMeasurement replaces the sample fields of one measurement.
-func (s *Store) UpdateMeasurement(ctx context.Context, id int64, in MeasurementInput) (Measurement, error) {
-	res, err := s.db.ExecContext(ctx, `
-		UPDATE measurements
-		SET type = ?, unit = ?, recorded_at = ?, values_json = ?
-		WHERE id = ?
-	`, in.Type, in.Unit, formatTime(in.RecordedAt), string(in.Values), id)
-	if err != nil {
-		if strings.Contains(err.Error(), "UNIQUE") {
-			return Measurement{}, fmt.Errorf("measurement already exists")
+func (s *Store) Counts(ctx context.Context) (stored, duplicates, conflicts int, err error) {
+	if err = s.db.QueryRowContext(ctx, `SELECT COUNT(1) FROM events`).Scan(&stored); err != nil {
+		return
+	}
+	if err = s.db.QueryRowContext(ctx, `SELECT COUNT(1) FROM ingest_log WHERE result = 'duplicate'`).Scan(&duplicates); err != nil {
+		return
+	}
+	err = s.db.QueryRowContext(ctx, `SELECT COUNT(1) FROM ingest_log WHERE result = 'conflict'`).Scan(&conflicts)
+	return
+}
+
+func seriesValue(kind string, values map[string]any) (float64, string) {
+	switch kind {
+	case schema.TypeBloodPressure:
+		return asFloat(values["systolic"]), "systolic"
+	case schema.TypeHeartRate:
+		return asFloat(values["bpm"]), "bpm"
+	case schema.TypeSpO2:
+		return asFloat(values["spo2"]), "spo2"
+	case schema.TypeTemperature:
+		return asFloat(values["celsius"]), "celsius"
+	case schema.TypeSteps:
+		return asFloat(values["steps"]), "steps"
+	case schema.TypeStress:
+		return asFloat(values["stress"]), "stress"
+	case schema.TypeHRV:
+		return asFloat(values["hrv_ms"]), "hrv_ms"
+	default:
+		return 0, ""
+	}
+}
+
+func asFloat(value any) float64 {
+	switch typed := value.(type) {
+	case float64:
+		return typed
+	case int:
+		return float64(typed)
+	case int64:
+		return float64(typed)
+	default:
+		return 0
+	}
+}
+
+func scanEvents(rows *sql.Rows) ([]StoredEvent, error) {
+	out := []StoredEvent{}
+	for rows.Next() {
+		var body, hash, received string
+		if err := rows.Scan(&body, &hash, &received); err != nil {
+			return nil, err
 		}
-		return Measurement{}, err
+		var event schema.Event
+		if err := json.Unmarshal([]byte(body), &event); err != nil {
+			return nil, err
+		}
+		at, _ := time.Parse(time.RFC3339Nano, received)
+		out = append(out, StoredEvent{Event: event, PayloadHash: hash, CanonicalJSON: body, ServerReceivedAt: at})
 	}
-	n, err := res.RowsAffected()
-	if err != nil {
-		return Measurement{}, err
-	}
-	if n == 0 {
-		return Measurement{}, ErrNotFound
-	}
-	return s.GetMeasurement(ctx, id)
+	return out, rows.Err()
 }
 
-// DeleteMeasurement removes one measurement.
-func (s *Store) DeleteMeasurement(ctx context.Context, id int64) error {
-	res, err := s.db.ExecContext(ctx, `DELETE FROM measurements WHERE id = ?`, id)
-	if err != nil {
-		return err
-	}
-	n, err := res.RowsAffected()
-	if err != nil {
-		return err
-	}
-	if n == 0 {
-		return ErrNotFound
-	}
-	return nil
+func logIngest(ctx context.Context, tx *sql.Tx, deviceID, eventID, result, presented, stored, at string) error {
+	_, err := tx.ExecContext(ctx, `
+		INSERT INTO ingest_log(device_id, event_id, result, presented_hash, stored_hash, at)
+		VALUES (?, ?, ?, ?, ?, ?)`, deviceID, eventID, result, presented, stored, at)
+	return err
 }
 
-const measurementSelect = `
-	SELECT m.id, m.device_id, d.name, d.address, d.kind, d.model,
-	       m.type, m.unit, m.recorded_at, m.values_json, m.created_at
-	FROM measurements m
-	JOIN devices d ON d.id = m.device_id
-`
-
-type scanner interface {
-	Scan(dest ...any) error
+func mustValues(values map[string]any) string {
+	body, _ := json.Marshal(values)
+	return string(body)
 }
 
-func scanDevice(row scanner) (Device, error) {
-	var device Device
-	var created, updated string
-	if err := row.Scan(&device.ID, &device.Name, &device.Kind, &device.Address, &device.Model, &created, &updated); err != nil {
-		return Device{}, err
+func nullable(value *string) any {
+	if value == nil {
+		return nil
 	}
-	var err error
-	if device.CreatedAt, err = parseTime(created); err != nil {
-		return Device{}, err
-	}
-	if device.UpdatedAt, err = parseTime(updated); err != nil {
-		return Device{}, err
-	}
-	return device, nil
+	return *value
 }
 
-func scanMeasurement(row scanner) (Measurement, error) {
-	var item Measurement
-	var recorded, created, values string
-	if err := row.Scan(
-		&item.ID, &item.DeviceID, &item.DeviceName, &item.DeviceAddress, &item.DeviceKind, &item.DeviceModel,
-		&item.Type, &item.Unit, &recorded, &values, &created,
-	); err != nil {
-		return Measurement{}, err
+func now() string { return time.Now().UTC().Format(time.RFC3339Nano) }
+
+func newToken() (string, string, error) {
+	buf := make([]byte, 32)
+	if _, err := rand.Read(buf); err != nil {
+		return "", "", err
 	}
-	item.Values = json.RawMessage(values)
-	var err error
-	if item.RecordedAt, err = parseTime(recorded); err != nil {
-		return Measurement{}, err
-	}
-	if item.CreatedAt, err = parseTime(created); err != nil {
-		return Measurement{}, err
-	}
-	return item, nil
+	token := hex.EncodeToString(buf)
+	return token, hashToken(token), nil
 }
 
-func formatTime(t time.Time) string {
-	return t.UTC().Format(time.RFC3339Nano)
-}
-
-func parseTime(value string) (time.Time, error) {
-	return time.Parse(time.RFC3339Nano, value)
+func hashToken(token string) string {
+	sum := sha256.Sum256([]byte(token))
+	return hex.EncodeToString(sum[:])
 }

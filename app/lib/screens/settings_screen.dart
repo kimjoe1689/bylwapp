@@ -4,10 +4,16 @@ import 'package:bylwapp/api/server_client.dart';
 import 'package:bylwapp/settings/settings_store.dart';
 
 class SettingsScreen extends StatefulWidget {
-  const SettingsScreen({super.key, required this.settings, this.clientFactory});
+  const SettingsScreen({
+    super.key,
+    required this.settings,
+    this.clientFactory,
+    this.prefs,
+  });
 
   final SettingsStore settings;
   final ServerClient Function(String baseUrl)? clientFactory;
+  final CollectorPrefs? prefs;
 
   @override
   State<SettingsScreen> createState() => _SettingsScreenState();
@@ -99,6 +105,13 @@ class _SettingsScreenState extends State<SettingsScreen> {
             const SizedBox(height: 8),
             const Text('手机和电脑需要能互相访问。模拟器访问本机服务时，地址通常不是 127.0.0.1。'),
             const SizedBox(height: 16),
+            if (widget.prefs != null)
+              SwitchListTile(
+                title: const Text('大字高对比'),
+                value: widget.prefs!.elderMode,
+                onChanged: (value) =>
+                    setState(() => widget.prefs!.elderMode = value),
+              ),
             FilledButton(
               onPressed: _ready && !_busy ? _save : null,
               child: const Text('保存'),
