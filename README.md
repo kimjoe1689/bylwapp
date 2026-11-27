@@ -1,8 +1,9 @@
 # bylwapp
 
-bylwapp 是一个蓝牙健康数据应用，仓库分成两部分：
+bylwapp 是一个蓝牙健康数据应用，仓库分成三部分：
 
-- `server/`：Go 管理后台，接收客户端上传的测量记录，并在浏览器里查看。
+- `server/`：Go 管理后台，接收客户端上传的测量记录，并在浏览器里查看。留作本机和局域网实现。
+- `worker/`：同一套 HTTP 接口的 Cloudflare Workers + D1 实现，按免费套餐部署。
 - `app/`：Flutter 客户端，连接血压计、心率带和智能戒指，把数据记在本机 SQLite，再上传到后台。
 
 业务目前就是这三类测量。设备型号可以替换，协议解析和存储字段是按标准蓝牙剖面以及 QRing 戒指明文协议写的。
@@ -12,8 +13,9 @@ bylwapp 是一个蓝牙健康数据应用，仓库分成两部分：
 ```text
 bylwapp/
 ├── app/          Flutter 客户端（Android、iOS）
-├── server/       Go 管理后台
-├── Makefile      转到上面两个子项目的常用命令
+├── server/       Go 管理后台（本地 / 局域网）
+├── worker/       同一套 API 的 Cloudflare Workers + D1 实现
+├── Makefile      转到上面几个子项目的常用命令
 └── .github/workflows/ci.yml
 ```
 
@@ -30,7 +32,7 @@ Flutter 设备驱动（解析报文）
         │  POST /api/v1/devices/{id}/events
         │  超时后 GET 同一 event_id 读回
         ▼
-Go API（chi）── SQLite（modernc.org/sqlite，无 CGO）
+Go API（chi + SQLite）或 Workers API（Hono + D1）
         │
         ▼
 浏览器管理页  /
@@ -85,7 +87,21 @@ CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -o bin/bylw-server ./cmd/server
 
 启动时会自动执行 `server/internal/migrate/sql` 里的迁移。重复启动不会重放已经记入 `schema_migrations` 的脚本。
 
-服务端没有登录。不要把它暴露到公网。
+Go 后台有登录。库里还没有用户时，用 `BYLW_BOOTSTRAP_ADMIN_USER` 和至少 8 位的 `BYLW_BOOTSTRAP_ADMIN_PASSWORD` 创建第一个管理员。公网部署用下面的 Workers，不要把这个进程直接暴露出去。
+
+## Cloudflare Workers
+
+接口和 Go 后台一致，Flutter 不用改请求格式。默认地址是 `https://bylw-api.zzjteacher.com`，设置里可以改回局域网的 Go 后台。管理员在网页里生成 6 位配对码，采集端 `POST /api/v1/devices/pair` 换设备令牌（10 分钟、一次有效）。没有对照数据时，RQ 导出仍然是 `not_evaluable`。
+
+本地检查：
+
+```bash
+cd worker
+npm ci
+npm test
+```
+
+部署不在 CI 里做。先创建 D1，把 `worker/wrangler.toml` 里的 `database_id` 换成真实 id，再执行合并后的 schema，设置 secret，最后上传已经打好的单个脚本。详细步骤、API 上传时的 `main_module` 和 bindings 见 [worker/README.md](worker/README.md)。打包产物是 `worker/deploy-bundle/index.js`，schema 是 `worker/deploy-bundle/schema.sql`。
 
 ## 运行客户端
 
@@ -98,7 +114,7 @@ flutter run
 ```
 
 - 首页列出本机测量，底部按钮把未上传的记录 `POST` 到 `/api/sync`。
-- 设置页保存服务器根地址，默认 `http://127.0.0.1:8080`。手机访问电脑上的服务时，要改成电脑的局域网地址。
+- 设置页保存服务器根地址，默认 `https://bylw-api.zzjteacher.com`。设置里仍可改成电脑上 Go 后台的局域网地址，例如 `http://192.168.1.20:8080`。`http` 和 `https` 都可以。
 - 扫描页连接设备。血压计可以对时，戒指可以拉历史。R09/R05 同步前会先写体温记录开关。
 
 `flutter_blue_plus` 2.x 把个人、非营利和教育用途标成 `License.nonprofit`。如果这个应用以后商用，需要改成 `License.commercial` 并取得对方的商业授权。

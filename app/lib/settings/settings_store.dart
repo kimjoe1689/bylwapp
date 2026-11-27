@@ -1,6 +1,6 @@
 import 'package:shared_preferences/shared_preferences.dart';
 
-const defaultServerBaseUrl = 'http://127.0.0.1:8080';
+const defaultServerBaseUrl = 'https://bylw-api.zzjteacher.com';
 
 abstract class SettingsStore {
   Future<String> getServerBaseUrl();
