@@ -41,6 +41,7 @@ class ResearchPage extends StatelessWidget {
               : () => _open(context, TaskLogScreen(study: study!)),
         ),
         const Card(
+          margin: EdgeInsets.only(bottom: 8),
           child: ListTile(
             leading: Icon(Icons.file_download_outlined),
             title: Text('导出说明'),
@@ -73,6 +74,7 @@ class _Entry extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Card(
+      margin: const EdgeInsets.only(bottom: 8),
       child: ListTile(
         leading: Icon(icon),
         title: Text(title),

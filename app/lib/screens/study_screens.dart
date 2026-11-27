@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:material_ui/material_ui.dart';
 
 import 'package:bylwapp/journal/canonical_event.dart';
@@ -62,25 +64,104 @@ class ReminderScreen extends StatefulWidget {
 }
 
 class _ReminderScreenState extends State<ReminderScreen> {
-  String _kind = 'MEDICATION';
-  final _minutes = TextEditingController(text: '1');
+  Timer? _timer;
+  DateTime? _lastCareLog;
+
+  @override
+  void initState() {
+    super.initState();
+    _timer = Timer.periodic(const Duration(seconds: 30), (_) => _tick());
+  }
 
   @override
   void dispose() {
-    _minutes.dispose();
+    _timer?.cancel();
     super.dispose();
   }
 
-  Future<void> _add() async {
-    final minutes = int.tryParse(_minutes.text) ?? 1;
+  Future<void> _add(String kind, int minutes) async {
     final id = 'rem-${DateTime.now().millisecondsSinceEpoch}';
     final item = widget.study.engine.schedule(
       scheduleId: id,
-      kind: _kind,
+      kind: kind,
       due: DateTime.now().toUtc().add(Duration(minutes: minutes)),
     );
     await widget.study.journalReminder(item);
-    setState(() {});
+    if (mounted) setState(() {});
+  }
+
+  Future<void> _openAdd() async {
+    var kind = 'MEDICATION';
+    var minutes = 15;
+    final saved = await showModalBottomSheet<bool>(
+      context: context,
+      showDragHandle: true,
+      builder: (context) {
+        return StatefulBuilder(
+          builder: (context, setSheet) {
+            return Padding(
+              padding: EdgeInsets.fromLTRB(
+                16,
+                0,
+                16,
+                24 + MediaQuery.viewInsetsOf(context).bottom,
+              ),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text('添加提醒', style: Theme.of(context).textTheme.titleLarge),
+                  const SizedBox(height: 16),
+                  SegmentedButton<String>(
+                    segments: const [
+                      ButtonSegment(
+                        value: 'MEDICATION',
+                        label: Text('服药'),
+                        icon: Icon(Icons.medication_outlined),
+                      ),
+                      ButtonSegment(
+                        value: 'HYDRATION',
+                        label: Text('喝水'),
+                        icon: Icon(Icons.water_drop_outlined),
+                      ),
+                    ],
+                    selected: {kind},
+                    onSelectionChanged: (value) =>
+                        setSheet(() => kind = value.first),
+                  ),
+                  const SizedBox(height: 16),
+                  const Text('多久之后'),
+                  const SizedBox(height: 8),
+                  Wrap(
+                    spacing: 8,
+                    runSpacing: 8,
+                    children: [
+                      for (final option in const [1, 5, 15, 30, 60])
+                        ChoiceChip(
+                          label: Text('$option 分钟'),
+                          selected: minutes == option,
+                          onSelected: (_) => setSheet(() => minutes = option),
+                        ),
+                    ],
+                  ),
+                  const SizedBox(height: 16),
+                  Align(
+                    alignment: Alignment.centerRight,
+                    child: FilledButton(
+                      onPressed: () => Navigator.pop(context, true),
+                      child: const Text('添加'),
+                    ),
+                  ),
+                ],
+              ),
+            );
+          },
+        );
+      },
+    );
+    if (saved == true) {
+      await _add(kind, minutes);
+    }
   }
 
   Future<void> _tick() async {
@@ -101,6 +182,17 @@ class _ReminderScreenState extends State<ReminderScreen> {
       await widget.study.journalReminder(updated);
     }
     setState(() {});
+  }
+
+  Future<void> _miss(ReminderDraft item) async {
+    final updated = widget.study.engine.markMissed(
+      item.scheduleId,
+      DateTime.now().toUtc(),
+    );
+    if (updated != null) {
+      await widget.study.journalReminder(updated);
+    }
+    if (mounted) setState(() {});
   }
 
   Future<void> _censor(ReminderDraft item) async {
@@ -132,6 +224,11 @@ class _ReminderScreenState extends State<ReminderScreen> {
     if (!overdue) {
       return;
     }
+    final now = DateTime.now().toUtc();
+    if (_lastCareLog != null && now.difference(_lastCareLog!) < window) {
+      return;
+    }
+    _lastCareLog = now;
     await widget.study.journal.append(
       CanonicalEvent(
         eventId: pathToken('care-${DateTime.now().microsecondsSinceEpoch}'),
@@ -157,60 +254,189 @@ class _ReminderScreenState extends State<ReminderScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final body = ListView(
-      padding: const EdgeInsets.all(16),
+    final body = Stack(
       children: [
-        Text('提醒', style: Theme.of(context).textTheme.headlineSmall),
-        const SizedBox(height: 8),
-        const Text('服药和喝水会先写入本地日志。到点后点「检查到期」，再用按钮确认、标记错过或删失。'),
-        const SizedBox(height: 12),
-        DropdownButton<String>(
-          value: _kind,
-          items: const [
-            DropdownMenuItem(value: 'MEDICATION', child: Text('服药')),
-            DropdownMenuItem(value: 'HYDRATION', child: Text('喝水')),
-          ],
-          onChanged: (value) => setState(() => _kind = value ?? 'MEDICATION'),
-        ),
-        TextField(
-          controller: _minutes,
-          decoration: const InputDecoration(labelText: '几分钟后提醒'),
-          keyboardType: TextInputType.number,
-        ),
-        const SizedBox(height: 8),
-        FilledButton(onPressed: _add, child: const Text('添加提醒')),
-        FilledButton(onPressed: _tick, child: const Text('检查到期')),
-        for (final item in widget.study.engine.items)
-          Card(
-            child: ListTile(
-              leading: Icon(
-                item.kind == 'HYDRATION'
-                    ? Icons.water_drop_outlined
-                    : Icons.medication_outlined,
-              ),
-              title: Text(item.kind == 'HYDRATION' ? '喝水' : '服药'),
-              subtitle: Text(_reminderLabel(item.disposition)),
-              trailing: Wrap(
-                spacing: 4,
+        Column(
+          children: [
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 8, 4, 0),
+              child: Row(
                 children: [
-                  FilledButton.tonal(
-                    onPressed: () => _ack(item),
-                    child: const Text('确认'),
-                  ),
-                  TextButton(
-                    onPressed: () => _censor(item),
-                    child: const Text('删失'),
+                  Text('提醒', style: Theme.of(context).textTheme.headlineSmall),
+                  const Spacer(),
+                  IconButton(
+                    tooltip: '检查到期',
+                    onPressed: _tick,
+                    icon: const Icon(Icons.update),
                   ),
                 ],
               ),
             ),
+            Expanded(
+              child: RefreshIndicator(
+                onRefresh: _tick,
+                child: _ReminderList(
+                  items: widget.study.engine.items,
+                  onAck: _ack,
+                  onMiss: _miss,
+                  onCensor: _censor,
+                ),
+              ),
+            ),
+          ],
+        ),
+        Positioned(
+          right: 16,
+          bottom: 16,
+          child: FloatingActionButton.extended(
+            onPressed: _openAdd,
+            icon: const Icon(Icons.add),
+            label: const Text('添加提醒'),
           ),
+        ),
       ],
     );
     if (widget.embedded) return body;
-    return Scaffold(
-      appBar: AppBar(title: const Text('提醒')),
-      body: body,
+    return Scaffold(body: body);
+  }
+}
+
+class _ReminderList extends StatelessWidget {
+  const _ReminderList({
+    required this.items,
+    required this.onAck,
+    required this.onMiss,
+    required this.onCensor,
+  });
+
+  final List<ReminderDraft> items;
+  final Future<void> Function(ReminderDraft item) onAck;
+  final Future<void> Function(ReminderDraft item) onMiss;
+  final Future<void> Function(ReminderDraft item) onCensor;
+
+  @override
+  Widget build(BuildContext context) {
+    if (items.isEmpty) {
+      return ListView(
+        physics: const AlwaysScrollableScrollPhysics(),
+        children: const [
+          SizedBox(height: 80),
+          Center(child: Icon(Icons.event_available_outlined, size: 48)),
+          SizedBox(height: 8),
+          Text('还没有提醒', textAlign: TextAlign.center),
+          SizedBox(height: 4),
+          Text('点右下角添加服药或喝水', textAlign: TextAlign.center),
+        ],
+      );
+    }
+    final now = DateTime.now();
+    final endOfToday = DateTime(now.year, now.month, now.day + 1);
+    bool finished(ReminderDraft item) {
+      return item.disposition == 'ACK_TIMELY' ||
+          item.disposition == 'ACK_DELAYED' ||
+          item.disposition == 'MISSED' ||
+          item.disposition == 'CENSORED';
+    }
+
+    final today = <ReminderDraft>[];
+    final upcoming = <ReminderDraft>[];
+    final done = <ReminderDraft>[];
+    for (final item in items) {
+      if (finished(item)) {
+        done.add(item);
+      } else if (item.due.toLocal().isBefore(endOfToday)) {
+        today.add(item);
+      } else {
+        upcoming.add(item);
+      }
+    }
+    final sections = [('今天', today), ('即将到期', upcoming), ('已完成', done)];
+    return ListView(
+      physics: const AlwaysScrollableScrollPhysics(),
+      padding: const EdgeInsets.fromLTRB(16, 8, 16, 88),
+      children: [
+        for (final section in sections)
+          if (section.$2.isNotEmpty) ...[
+            Padding(
+              padding: const EdgeInsets.only(top: 8, bottom: 8),
+              child: Text(
+                section.$1,
+                style: Theme.of(context).textTheme.titleSmall,
+              ),
+            ),
+            for (final item in section.$2)
+              _ReminderTile(
+                item: item,
+                onAck: finished(item) ? null : () => onAck(item),
+                onMiss: finished(item) ? null : () => onMiss(item),
+                onCensor: finished(item) ? null : () => onCensor(item),
+              ),
+          ],
+      ],
+    );
+  }
+}
+
+class _ReminderTile extends StatelessWidget {
+  const _ReminderTile({
+    required this.item,
+    required this.onAck,
+    required this.onMiss,
+    required this.onCensor,
+  });
+
+  final ReminderDraft item;
+  final VoidCallback? onAck;
+  final VoidCallback? onMiss;
+  final VoidCallback? onCensor;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final water = item.kind == 'HYDRATION';
+    final due = item.due.toLocal();
+    String two(int value) => value.toString().padLeft(2, '0');
+    final when = '${two(due.hour)}:${two(due.minute)}';
+    return Card(
+      margin: const EdgeInsets.only(bottom: 8),
+      child: ListTile(
+        leading: CircleAvatar(
+          backgroundColor: water
+              ? scheme.secondaryContainer
+              : scheme.primaryContainer,
+          child: Icon(
+            water ? Icons.water_drop_outlined : Icons.medication_outlined,
+          ),
+        ),
+        title: Text(water ? '喝水' : '服药'),
+        subtitle: Text('$when · ${_reminderLabel(item.disposition)}'),
+        trailing: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            if (item.disposition == 'COMMAND_LOGGED')
+              FilledButton.tonal(
+                style: FilledButton.styleFrom(
+                  visualDensity: VisualDensity.compact,
+                  minimumSize: const Size(64, 36),
+                  padding: const EdgeInsets.symmetric(horizontal: 12),
+                ),
+                onPressed: onAck,
+                child: const Text('确认'),
+              ),
+            if (onMiss != null || onCensor != null)
+              PopupMenuButton<String>(
+                onSelected: (value) {
+                  if (value == 'miss') onMiss?.call();
+                  if (value == 'censor') onCensor?.call();
+                },
+                itemBuilder: (context) => const [
+                  PopupMenuItem(value: 'miss', child: Text('错过')),
+                  PopupMenuItem(value: 'censor', child: Text('删失')),
+                ],
+              ),
+          ],
+        ),
+      ),
     );
   }
 }
@@ -220,13 +446,13 @@ String _reminderLabel(String disposition) {
     case 'SCHEDULED':
       return '已安排';
     case 'COMMAND_LOGGED':
-      return '已到点，等待确认';
+      return '到期';
     case 'ACK_TIMELY':
-      return '已及时确认';
+      return '及时确认';
     case 'ACK_DELAYED':
       return '延迟确认';
     case 'MISSED':
-      return '已错过';
+      return '错过';
     case 'CENSORED':
       return '已删失';
     default:

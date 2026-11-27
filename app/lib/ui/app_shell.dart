@@ -93,6 +93,7 @@ class _AppShellState extends State<AppShell> {
         clientFactory: widget.clientFactory,
         onChanged: () => setState(() {}),
         devices: _devices,
+        onOpenReminders: () => setState(() => _index = 2),
       ),
       ScanScreen(
         repository: widget.repository,

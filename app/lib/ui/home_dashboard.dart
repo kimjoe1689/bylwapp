@@ -19,6 +19,7 @@ class HomeDashboard extends StatefulWidget {
     this.clientFactory,
     this.onChanged,
     this.devices,
+    this.onOpenReminders,
   });
 
   final List<LocalRecord> records;
@@ -29,6 +30,7 @@ class HomeDashboard extends StatefulWidget {
   final ServerClient Function(String baseUrl)? clientFactory;
   final VoidCallback? onChanged;
   final BleDeviceManager? devices;
+  final VoidCallback? onOpenReminders;
 
   @override
   State<HomeDashboard> createState() => _HomeDashboardState();
@@ -36,6 +38,7 @@ class HomeDashboard extends StatefulWidget {
 
 class _HomeDashboardState extends State<HomeDashboard> {
   int _pending = 0;
+  String? _lastSync;
   bool _syncing = false;
 
   @override
@@ -51,7 +54,13 @@ class _HomeDashboardState extends State<HomeDashboard> {
       return;
     }
     final rows = await study.journal.pending();
-    if (mounted) setState(() => _pending = rows.length);
+    final syncedAt = await study.journal.latestSyncedAt();
+    if (mounted) {
+      setState(() {
+        _pending = rows.length;
+        _lastSync = syncedAt;
+      });
+    }
   }
 
   Future<void> _sync() async {
@@ -125,77 +134,55 @@ class _HomeDashboardState extends State<HomeDashboard> {
         const SizedBox(height: 14),
         _SyncBar(
           pending: widget.demo ? 0 : _pending,
+          lastSync: widget.demo ? null : _lastSync,
           syncing: _syncing,
           onSync: _sync,
         ),
-        const SizedBox(height: 14),
+        const SizedBox(height: 16),
         Text('设备状态', style: Theme.of(context).textTheme.titleMedium),
         const SizedBox(height: 8),
-        Row(
-          children: [
-            Expanded(
-              child: _DeviceCard(
+        Card(
+          child: Column(
+            children: [
+              _DeviceRow(
                 title: '戒指 R09',
                 icon: Icons.circle_outlined,
                 kind: 'ring',
                 record: _latestKind('ring'),
                 devices: widget.demo ? null : widget.devices,
               ),
-            ),
-            const SizedBox(width: 8),
-            Expanded(
-              child: _DeviceCard(
+              const Divider(height: 1),
+              _DeviceRow(
                 title: '心率带 H303',
                 icon: Icons.monitor_heart_outlined,
                 kind: 'heart_rate',
                 record: _latestKind('heart_rate'),
                 devices: widget.demo ? null : widget.devices,
               ),
-            ),
-            const SizedBox(width: 8),
-            Expanded(
-              child: _DeviceCard(
+              const Divider(height: 1),
+              _DeviceRow(
                 title: '血压计 YE680B',
                 icon: Icons.bloodtype_outlined,
                 kind: 'blood_pressure',
                 record: _latestKind('blood_pressure'),
                 devices: widget.demo ? null : widget.devices,
               ),
-            ),
-          ],
+            ],
+          ),
         ),
         const SizedBox(height: 16),
         Text('今日指标', style: Theme.of(context).textTheme.titleMedium),
         const SizedBox(height: 8),
-        if (_visibleMetrics().isEmpty)
-          const _EmptyState()
-        else
-          Wrap(spacing: 8, runSpacing: 8, children: _visibleMetrics()),
+        _MetricGrid(
+          records: widget.records,
+          devices: widget.demo ? null : widget.devices,
+        ),
         const SizedBox(height: 16),
-        Card(
-          child: Padding(
-            padding: const EdgeInsets.all(16),
-            child: Row(
-              children: [
-                SizedBox(
-                  width: 72,
-                  height: 72,
-                  child: CircularProgressIndicator(
-                    value: items.isEmpty ? 0 : done / items.length,
-                    strokeWidth: 8,
-                  ),
-                ),
-                const SizedBox(width: 16),
-                Expanded(
-                  child: Text(
-                    items.isEmpty
-                        ? '今天还没有提醒。到「提醒」页添加服药或喝水。'
-                        : '已确认 $done / ${items.length} 条提醒',
-                  ),
-                ),
-              ],
-            ),
-          ),
+        _ReminderCard(
+          empty: items.isEmpty,
+          done: done,
+          total: items.length,
+          onOpen: widget.onOpenReminders,
         ),
       ],
     );
@@ -216,109 +203,143 @@ class _HomeDashboardState extends State<HomeDashboard> {
     }
     return null;
   }
+}
 
-  List<Widget> _visibleMetrics() {
-    Widget? card(
-      String type,
-      String label,
-      String unit,
-      IconData icon,
-      double Function(Map<String, Object?>) pick,
-    ) {
-      final rows = widget.records
-          .where((record) => record.measurement.type == type)
-          .toList();
-      final live = widget.demo ? null : widget.devices?.latestByType[type];
-      if (rows.isEmpty && live == null) return null;
-      final latest = live?.values ?? rows.first.measurement.values;
-      final series = [
-        ...rows.reversed.map((record) => pick(record.measurement.values)),
-        if (live != null) pick(live.values),
-      ];
-      return SizedBox(
-        width: 160,
-        child: Card(
-          child: Padding(
-            padding: const EdgeInsets.all(12),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Icon(icon, size: 20),
-                const SizedBox(height: 6),
-                Text(label),
-                Text(
-                  type == 'blood_pressure'
-                      ? '${_num(_asDouble(latest['systolic']))}/${_num(_asDouble(latest['diastolic']))} $unit'
-                      : '${_num(pick(latest))} $unit',
-                  style: Theme.of(context).textTheme.titleLarge,
-                ),
-                MiniChart(
-                  values: series,
-                  color: Theme.of(context).colorScheme.primary,
-                ),
-              ],
-            ),
-          ),
-        ),
-      );
-    }
+class _MetricSpec {
+  const _MetricSpec(this.type, this.label, this.unit, this.icon, this.pick);
 
-    final cards = [
-      card(
-        'heart_rate',
-        '心率',
-        'bpm',
-        Icons.favorite_outline,
-        (v) => _asDouble(v['bpm']),
-      ),
-      card(
-        'blood_pressure',
-        '血压',
-        'mmHg',
-        Icons.bloodtype_outlined,
-        (v) => _asDouble(v['systolic']),
-      ),
-      card(
-        'spo2',
-        '血氧',
-        '%',
-        Icons.water_drop_outlined,
-        (v) => _asDouble(v['spo2']),
-      ),
-      card(
-        'temperature',
-        '体温',
-        '°C',
-        Icons.thermostat_outlined,
-        (v) => _asDouble(v['celsius']),
-      ),
-      card(
-        'steps',
-        '步数',
-        '步',
-        Icons.directions_walk,
-        (v) => _asDouble(v['steps']),
-      ),
-      card(
-        'sleep',
-        '睡眠',
-        '分钟',
-        Icons.bedtime_outlined,
-        (v) => _asDouble(v['duration_min']),
-      ),
-    ];
-    return [for (final item in cards) ?item];
+  final String type;
+  final String label;
+  final String unit;
+  final IconData icon;
+  final double Function(Map<String, Object?> values) pick;
+}
+
+class _MetricGrid extends StatelessWidget {
+  const _MetricGrid({required this.records, required this.devices});
+
+  final List<LocalRecord> records;
+  final BleDeviceManager? devices;
+
+  static const _specs = [
+    _MetricSpec('heart_rate', '心率', 'bpm', Icons.favorite_outline, _bpm),
+    _MetricSpec(
+      'blood_pressure',
+      '血压',
+      'mmHg',
+      Icons.bloodtype_outlined,
+      _systolic,
+    ),
+    _MetricSpec('spo2', '血氧', '%', Icons.water_drop_outlined, _spo2),
+    _MetricSpec('temperature', '体温', '°C', Icons.thermostat_outlined, _temp),
+    _MetricSpec('steps', '步数', '步', Icons.directions_walk, _steps),
+    _MetricSpec('sleep', '睡眠', '分钟', Icons.bedtime_outlined, _sleep),
+  ];
+
+  @override
+  Widget build(BuildContext context) {
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final width = (constraints.maxWidth - 8) / 2;
+        return Wrap(
+          spacing: 8,
+          runSpacing: 8,
+          children: [
+            for (final spec in _specs)
+              SizedBox(
+                width: width,
+                child: _MetricCard(
+                  spec: spec,
+                  records: records,
+                  devices: devices,
+                ),
+              ),
+          ],
+        );
+      },
+    );
   }
 }
+
+class _MetricCard extends StatelessWidget {
+  const _MetricCard({
+    required this.spec,
+    required this.records,
+    required this.devices,
+  });
+
+  final _MetricSpec spec;
+  final List<LocalRecord> records;
+  final BleDeviceManager? devices;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final rows = records
+        .where((record) => record.measurement.type == spec.type)
+        .toList();
+    final live = devices?.latestByType[spec.type];
+    final hasValue = live != null || rows.isNotEmpty;
+    final latest =
+        live?.values ?? (rows.isEmpty ? null : rows.first.measurement.values);
+    final series = [
+      ...rows.reversed.map((record) => spec.pick(record.measurement.values)),
+      if (live != null) spec.pick(live.values),
+    ];
+    final value = !hasValue || latest == null
+        ? '--'
+        : spec.type == 'blood_pressure'
+        ? '${_num(_asDouble(latest['systolic']))}/${_num(_asDouble(latest['diastolic']))}'
+        : _num(spec.pick(latest));
+    final color = hasValue ? scheme.onSurface : scheme.onSurfaceVariant;
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(12),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Icon(
+              spec.icon,
+              size: 20,
+              color: hasValue ? scheme.primary : scheme.outline,
+            ),
+            const SizedBox(height: 8),
+            Text(spec.label, maxLines: 1, overflow: TextOverflow.ellipsis),
+            Text(
+              hasValue ? '$value ${spec.unit}' : '--',
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: Theme.of(context).textTheme.titleLarge
+                  ?.copyWith(color: color),
+            ),
+            MiniChart(
+              values: hasValue ? series : const [],
+              color: hasValue ? scheme.primary : scheme.outline,
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+double _bpm(Map<String, Object?> values) => _asDouble(values['bpm']);
+double _systolic(Map<String, Object?> values) => _asDouble(values['systolic']);
+double _spo2(Map<String, Object?> values) => _asDouble(values['spo2']);
+double _temp(Map<String, Object?> values) => _asDouble(values['celsius']);
+double _steps(Map<String, Object?> values) => _asDouble(values['steps']);
+double _sleep(Map<String, Object?> values) => _asDouble(values['duration_min']);
 
 class _SyncBar extends StatelessWidget {
   const _SyncBar({
     required this.pending,
+    required this.lastSync,
     required this.syncing,
     required this.onSync,
   });
 
   final int pending;
+  final String? lastSync;
   final bool syncing;
   final VoidCallback onSync;
 
@@ -327,9 +348,9 @@ class _SyncBar extends StatelessWidget {
     return Card(
       child: ListTile(
         leading: const Icon(Icons.cloud_upload_outlined),
-        title: Text(pending == 0 ? '日志已同步' : '待上传 $pending 条'),
-        subtitle: const Text('最近同步时间以服务器回执为准'),
-        trailing: FilledButton(
+        title: Text(pending == 0 ? '没有待上传' : '待上传 $pending 条'),
+        subtitle: Text(_syncLabel(lastSync)),
+        trailing: FilledButton.tonal(
           onPressed: syncing ? null : onSync,
           child: Text(syncing ? '同步中' : '同步'),
         ),
@@ -338,8 +359,8 @@ class _SyncBar extends StatelessWidget {
   }
 }
 
-class _DeviceCard extends StatelessWidget {
-  const _DeviceCard({
+class _DeviceRow extends StatelessWidget {
+  const _DeviceRow({
     required this.title,
     required this.icon,
     required this.kind,
@@ -355,6 +376,7 @@ class _DeviceCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
     final live = devices?.latestByKind[kind];
     final measurement = live ?? record?.measurement;
     final when = measurement?.recordedAt.toLocal();
@@ -367,42 +389,137 @@ class _DeviceCard extends StatelessWidget {
     final status =
         devices?.phaseLabel(kind) ?? (record == null ? '未连接' : '有读数');
     final reading = measurement == null
-        ? null
+        ? '--'
         : measurement.type == 'heart_rate'
-        ? '${_num(_asDouble(measurement.values['bpm']))} bpm'
+        ? _num(_asDouble(measurement.values['bpm']))
         : measurement.type == 'blood_pressure'
         ? '${_num(_asDouble(measurement.values['systolic']))}/${_num(_asDouble(measurement.values['diastolic']))}'
         : summarize(measurement);
+    final clock = when == null
+        ? ''
+        : '${when.hour.toString().padLeft(2, '0')}:${when.minute.toString().padLeft(2, '0')}';
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+      child: Row(
+        children: [
+          Icon(icon, color: scheme.primary),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(title, maxLines: 1, overflow: TextOverflow.ellipsis),
+                const SizedBox(height: 4),
+                Wrap(
+                  spacing: 8,
+                  crossAxisAlignment: WrapCrossAlignment.center,
+                  children: [
+                    _StatusChip(label: status),
+                    if (worn != null)
+                      Text(
+                        worn,
+                        style: TextStyle(
+                          fontSize: 12,
+                          color: scheme.onSurfaceVariant,
+                        ),
+                      ),
+                  ],
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(width: 8),
+          Column(
+            crossAxisAlignment: CrossAxisAlignment.end,
+            children: [
+              Text(reading, style: Theme.of(context).textTheme.titleMedium),
+              if (clock.isNotEmpty)
+                Text(
+                  clock,
+                  style: TextStyle(
+                    fontSize: 12,
+                    color: scheme.onSurfaceVariant,
+                  ),
+                ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _StatusChip extends StatelessWidget {
+  const _StatusChip({required this.label});
+
+  final String label;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+      decoration: BoxDecoration(
+        color: scheme.secondaryContainer,
+        borderRadius: BorderRadius.circular(8),
+      ),
+      child: Text(
+        label,
+        style: TextStyle(fontSize: 11, color: scheme.onSecondaryContainer),
+      ),
+    );
+  }
+}
+
+class _ReminderCard extends StatelessWidget {
+  const _ReminderCard({
+    required this.empty,
+    required this.done,
+    required this.total,
+    required this.onOpen,
+  });
+
+  final bool empty;
+  final int done;
+  final int total;
+  final VoidCallback? onOpen;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final progress = total == 0 ? 0.0 : done / total;
     return Card(
       child: Padding(
-        padding: const EdgeInsets.all(10),
+        padding: const EdgeInsets.all(16),
         child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Icon(icon),
-            const SizedBox(height: 6),
-            Text(title, maxLines: 2, overflow: TextOverflow.ellipsis),
+            if (empty)
+              Icon(Icons.notifications_none, size: 40, color: scheme.primary)
+            else
+              SizedBox(
+                width: 56,
+                height: 56,
+                child: CircularProgressIndicator(
+                  value: progress,
+                  strokeWidth: 6,
+                  backgroundColor: scheme.surfaceContainerHighest,
+                ),
+              ),
+            const SizedBox(height: 8),
             Text(
-              status,
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-              style: TextStyle(
-                color: Theme.of(context).colorScheme.primary,
-                fontSize: 12,
-              ),
+              empty ? '今天还没有提醒' : '已确认 $done / $total 条提醒',
+              textAlign: TextAlign.center,
             ),
-            if (reading != null)
+            if (empty) ...[
+              const SizedBox(height: 4),
               Text(
-                worn == null ? reading : '$reading · $worn',
-                maxLines: 2,
-                overflow: TextOverflow.ellipsis,
-                style: const TextStyle(fontSize: 12),
+                '可以添加服药或喝水提醒',
+                textAlign: TextAlign.center,
+                style: TextStyle(color: scheme.onSurfaceVariant),
               ),
-            if (when != null)
-              Text(
-                '${when.hour.toString().padLeft(2, '0')}:${when.minute.toString().padLeft(2, '0')}:${when.second.toString().padLeft(2, '0')}',
-                style: const TextStyle(fontSize: 12),
-              ),
+              const SizedBox(height: 12),
+              FilledButton.tonal(onPressed: onOpen, child: const Text('去添加提醒')),
+            ],
           ],
         ),
       ),
@@ -410,33 +527,17 @@ class _DeviceCard extends StatelessWidget {
   }
 }
 
-class _EmptyState extends StatelessWidget {
-  const _EmptyState();
-
-  @override
-  Widget build(BuildContext context) {
-    final scheme = Theme.of(context).colorScheme;
-    return Card(
-      child: Padding(
-        padding: const EdgeInsets.all(20),
-        child: Column(
-          children: [
-            Icon(Icons.spa_outlined, size: 56, color: scheme.primary),
-            const SizedBox(height: 8),
-            const Text(
-              '还没有今天的读数',
-              style: TextStyle(fontWeight: FontWeight.w700),
-            ),
-            const SizedBox(height: 6),
-            const Text(
-              '连接戒指、心率带或血压计后，心率、血压、血氧、体温、步数和睡眠会显示在这里。也可以在「我的」打开演示数据，先看看版式。',
-              textAlign: TextAlign.center,
-            ),
-          ],
-        ),
-      ),
-    );
+String _syncLabel(String? raw) {
+  if (raw == null || raw.isEmpty) {
+    return '最近同步：还没有';
   }
+  final parsed = DateTime.tryParse(raw);
+  if (parsed == null) {
+    return '最近同步：$raw';
+  }
+  final local = parsed.toLocal();
+  String two(int value) => value.toString().padLeft(2, '0');
+  return '最近同步：${local.month}月${local.day}日 ${two(local.hour)}:${two(local.minute)}';
 }
 
 String _num(double value) => value == value.roundToDouble()

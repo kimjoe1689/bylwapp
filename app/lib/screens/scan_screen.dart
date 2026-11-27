@@ -200,9 +200,12 @@ class _ScanScreenState extends State<ScanScreen>
           ),
         ),
         const SizedBox(height: 8),
-        FilledButton(
-          onPressed: _busy ? null : _toggleScan,
-          child: Text(_scanning ? '停止扫描' : '开始扫描'),
+        Align(
+          child: FilledButton.icon(
+            onPressed: _busy ? null : _toggleScan,
+            icon: Icon(_scanning ? Icons.stop : Icons.bluetooth_searching),
+            label: Text(_scanning ? '停止扫描' : '开始扫描'),
+          ),
         ),
         if (devices?.device != null) ...[
           const SizedBox(height: 12),
@@ -226,6 +229,7 @@ class _ScanScreenState extends State<ScanScreen>
         else
           for (final hit in _hits)
             Card(
+              margin: const EdgeInsets.only(bottom: 8),
               child: ListTile(
                 leading: const Icon(Icons.bluetooth_connected),
                 title: Text(hit.name),

@@ -136,19 +136,24 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 setState(() => widget.prefs!.autoSync = value),
           ),
         ],
-        FilledButton(
-          onPressed: _ready && !_busy ? _save : null,
-          child: const Text('保存'),
-        ),
         const SizedBox(height: 8),
-        OutlinedButton(
-          onPressed: _ready && !_busy ? _check : null,
-          child: const Text('检测连接'),
-        ),
-        const SizedBox(height: 8),
-        OutlinedButton(
-          onPressed: widget.onOpenDebug,
-          child: const Text('蓝牙调试'),
+        Wrap(
+          spacing: 8,
+          runSpacing: 8,
+          children: [
+            FilledButton(
+              onPressed: _ready && !_busy ? _save : null,
+              child: const Text('保存'),
+            ),
+            FilledButton.tonal(
+              onPressed: _ready && !_busy ? _check : null,
+              child: const Text('检测连接'),
+            ),
+            TextButton(
+              onPressed: widget.onOpenDebug,
+              child: const Text('蓝牙调试'),
+            ),
+          ],
         ),
       ],
     );

@@ -72,6 +72,20 @@ class ReminderEngine {
     return item;
   }
 
+  ReminderDraft? markMissed(String scheduleId, DateTime now) {
+    final item = _find(scheduleId);
+    if (item == null ||
+        item.disposition == 'ACK_TIMELY' ||
+        item.disposition == 'ACK_DELAYED' ||
+        item.disposition == 'CENSORED' ||
+        item.disposition == 'MISSED') {
+      return null;
+    }
+    item.firedAt ??= now;
+    item.disposition = 'MISSED';
+    return item;
+  }
+
   ReminderDraft? censor(String scheduleId) {
     final item = _find(scheduleId);
     if (item == null ||

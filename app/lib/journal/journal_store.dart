@@ -80,6 +80,20 @@ class JournalStore {
         rows.single['canonical_json'] == body;
   }
 
+  Future<String?> latestSyncedAt() async {
+    final rows = await _db.query(
+      'journal',
+      columns: ['server_received_at'],
+      where: "sync_state = 'synced' AND server_received_at IS NOT NULL",
+      orderBy: 'server_received_at DESC',
+      limit: 1,
+    );
+    if (rows.isEmpty) {
+      return null;
+    }
+    return rows.first['server_received_at'] as String?;
+  }
+
   Future<List<JournalRecord>> pending() async {
     final rows = await _db.query(
       'journal',
