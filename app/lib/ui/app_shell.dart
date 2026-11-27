@@ -94,6 +94,7 @@ class _AppShellState extends State<AppShell> {
         onChanged: () => setState(() {}),
         devices: _devices,
         onOpenReminders: () => setState(() => _index = 2),
+        onOpenDevice: _openInsight,
       ),
       ScanScreen(
         repository: widget.repository,
@@ -101,6 +102,7 @@ class _AppShellState extends State<AppShell> {
         embedded: true,
         devices: _devices,
         onReading: _onReading,
+        onOpenKind: _openInsight,
       ),
       widget.study == null
           ? const _NeedStudy(text: '提醒需要本地日志。从正常启动进入后即可使用。')
@@ -156,6 +158,22 @@ class _AppShellState extends State<AppShell> {
             label: '我的',
           ),
         ],
+      ),
+    );
+  }
+
+  void _openInsight(String kind) {
+    Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder: (context) => DeviceDetailScreen(
+          kind: kind,
+          devices: _devices,
+          journal: widget.study?.journal,
+          demo: widget.prefs?.showDemo == true,
+          ble: widget.ble,
+          onReading: _onReading,
+          onRequestScan: () => setState(() => _index = 1),
+        ),
       ),
     );
   }
@@ -239,19 +257,4 @@ class _NeedStudy extends StatelessWidget {
       ),
     );
   }
-}
-
-class DeviceHistoryPage extends StatelessWidget {
-  const DeviceHistoryPage({
-    super.key,
-    required this.title,
-    required this.records,
-  });
-
-  final String title;
-  final List<LocalRecord> records;
-
-  @override
-  Widget build(BuildContext context) =>
-      DeviceDetailScreen(title: title, records: records);
 }

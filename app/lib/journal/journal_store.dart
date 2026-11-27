@@ -103,6 +103,47 @@ class JournalStore {
     return rows.map(_record).toList();
   }
 
+  /// Newest matching rows. [offset] skips matches, not raw table rows.
+  Future<List<JournalRecord>> matching({
+    required bool Function(JournalRecord row) match,
+    int limit = 20,
+    int offset = 0,
+  }) async {
+    final found = <JournalRecord>[];
+    var skipped = 0;
+    var dbOffset = 0;
+    const batch = 80;
+    while (found.length < limit) {
+      final rows = await _db.query(
+        'journal',
+        orderBy: 'created_at DESC',
+        limit: batch,
+        offset: dbOffset,
+      );
+      if (rows.isEmpty) {
+        break;
+      }
+      dbOffset += rows.length;
+      for (final row in rows.map(_record)) {
+        if (!match(row)) {
+          continue;
+        }
+        if (skipped < offset) {
+          skipped++;
+          continue;
+        }
+        found.add(row);
+        if (found.length == limit) {
+          return found;
+        }
+      }
+      if (rows.length < batch) {
+        break;
+      }
+    }
+    return found;
+  }
+
   Future<List<JournalRecord>> recent({int limit = 100}) async {
     final rows = await _db.query(
       'journal',

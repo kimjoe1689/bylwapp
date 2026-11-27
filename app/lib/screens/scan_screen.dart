@@ -18,6 +18,7 @@ class ScanScreen extends StatefulWidget {
     this.onReading,
     this.embedded = false,
     this.devices,
+    this.onOpenKind,
   });
 
   final HealthRepository repository;
@@ -26,6 +27,7 @@ class ScanScreen extends StatefulWidget {
   onReading;
   final bool embedded;
   final BleDeviceManager? devices;
+  final void Function(String kind)? onOpenKind;
 
   @override
   State<ScanScreen> createState() => _ScanScreenState();
@@ -148,20 +150,21 @@ class _ScanScreenState extends State<ScanScreen>
   }
 
   Future<void> _openDetail(BleScanHit hit) async {
-    final all = await widget.repository.listRecent();
-    final mine = all
-        .where((record) => record.device.address == hit.address)
-        .toList();
-    if (!mounted) {
+    final kind = driverById(hit.driverId)?.kind;
+    if (kind != null && widget.onOpenKind != null) {
+      widget.onOpenKind!(kind);
+      return;
+    }
+    if (kind == null || !mounted) {
       return;
     }
     await Navigator.of(context).push(
       MaterialPageRoute<void>(
         builder: (context) => DeviceDetailScreen(
-          title: hit.name,
-          address: hit.address,
-          records: mine,
+          kind: kind,
           devices: widget.devices,
+          ble: widget.ble,
+          onReading: widget.onReading,
         ),
       ),
     );

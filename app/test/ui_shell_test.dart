@@ -91,6 +91,10 @@ void main() {
     await tester.tap(find.text('首页'));
     await tester.pumpAndSettle();
     expect(find.textContaining('72'), findsWidgets);
+    await tester.tap(find.text('心率带 H303'));
+    await tester.pumpAndSettle();
+    expect(find.text('断开'), findsOneWidget);
+    expect(find.textContaining('72 bpm'), findsOneWidget);
   });
 
   testWidgets('demo readings stay on screen and are labeled', (tester) async {

@@ -6,6 +6,7 @@ import 'package:bylwapp/models/health_record.dart';
 import 'package:bylwapp/screens/study_screens.dart';
 import 'package:bylwapp/settings/settings_store.dart';
 import 'package:bylwapp/sync/sync_worker.dart';
+import 'package:bylwapp/ui/device_profile.dart';
 import 'package:bylwapp/ui/mini_chart.dart';
 
 class HomeDashboard extends StatefulWidget {
@@ -20,6 +21,7 @@ class HomeDashboard extends StatefulWidget {
     this.onChanged,
     this.devices,
     this.onOpenReminders,
+    this.onOpenDevice,
   });
 
   final List<LocalRecord> records;
@@ -31,6 +33,7 @@ class HomeDashboard extends StatefulWidget {
   final VoidCallback? onChanged;
   final BleDeviceManager? devices;
   final VoidCallback? onOpenReminders;
+  final void Function(String kind)? onOpenDevice;
 
   @override
   State<HomeDashboard> createState() => _HomeDashboardState();
@@ -150,6 +153,7 @@ class _HomeDashboardState extends State<HomeDashboard> {
                 kind: 'ring',
                 record: _latestKind('ring'),
                 devices: widget.demo ? null : widget.devices,
+                onTap: () => widget.onOpenDevice?.call('ring'),
               ),
               const Divider(height: 1),
               _DeviceRow(
@@ -158,6 +162,7 @@ class _HomeDashboardState extends State<HomeDashboard> {
                 kind: 'heart_rate',
                 record: _latestKind('heart_rate'),
                 devices: widget.demo ? null : widget.devices,
+                onTap: () => widget.onOpenDevice?.call('heart_rate'),
               ),
               const Divider(height: 1),
               _DeviceRow(
@@ -166,6 +171,7 @@ class _HomeDashboardState extends State<HomeDashboard> {
                 kind: 'blood_pressure',
                 record: _latestKind('blood_pressure'),
                 devices: widget.demo ? null : widget.devices,
+                onTap: () => widget.onOpenDevice?.call('blood_pressure'),
               ),
             ],
           ),
@@ -176,6 +182,7 @@ class _HomeDashboardState extends State<HomeDashboard> {
         _MetricGrid(
           records: widget.records,
           devices: widget.demo ? null : widget.devices,
+          onOpen: widget.onOpenDevice,
         ),
         const SizedBox(height: 16),
         _ReminderCard(
@@ -216,10 +223,15 @@ class _MetricSpec {
 }
 
 class _MetricGrid extends StatelessWidget {
-  const _MetricGrid({required this.records, required this.devices});
+  const _MetricGrid({
+    required this.records,
+    required this.devices,
+    required this.onOpen,
+  });
 
   final List<LocalRecord> records;
   final BleDeviceManager? devices;
+  final void Function(String kind)? onOpen;
 
   static const _specs = [
     _MetricSpec('heart_rate', '心率', 'bpm', Icons.favorite_outline, _bpm),
@@ -252,6 +264,8 @@ class _MetricGrid extends StatelessWidget {
                   spec: spec,
                   records: records,
                   devices: devices,
+                  onTap: () =>
+                      onOpen?.call(DeviceProfile.kindForMetric(spec.type)),
                 ),
               ),
           ],
@@ -266,11 +280,13 @@ class _MetricCard extends StatelessWidget {
     required this.spec,
     required this.records,
     required this.devices,
+    required this.onTap,
   });
 
   final _MetricSpec spec;
   final List<LocalRecord> records;
   final BleDeviceManager? devices;
+  final VoidCallback onTap;
 
   @override
   Widget build(BuildContext context) {
@@ -293,30 +309,34 @@ class _MetricCard extends StatelessWidget {
         : _num(spec.pick(latest));
     final color = hasValue ? scheme.onSurface : scheme.onSurfaceVariant;
     return Card(
-      child: Padding(
-        padding: const EdgeInsets.all(12),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Icon(
-              spec.icon,
-              size: 20,
-              color: hasValue ? scheme.primary : scheme.outline,
-            ),
-            const SizedBox(height: 8),
-            Text(spec.label, maxLines: 1, overflow: TextOverflow.ellipsis),
-            Text(
-              hasValue ? '$value ${spec.unit}' : '--',
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-              style: Theme.of(context).textTheme.titleLarge
-                  ?.copyWith(color: color),
-            ),
-            MiniChart(
-              values: hasValue ? series : const [],
-              color: hasValue ? scheme.primary : scheme.outline,
-            ),
-          ],
+      clipBehavior: Clip.antiAlias,
+      child: InkWell(
+        onTap: onTap,
+        child: Padding(
+          padding: const EdgeInsets.all(12),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Icon(
+                spec.icon,
+                size: 20,
+                color: hasValue ? scheme.primary : scheme.outline,
+              ),
+              const SizedBox(height: 8),
+              Text(spec.label, maxLines: 1, overflow: TextOverflow.ellipsis),
+              Text(
+                hasValue ? '$value ${spec.unit}' : '--',
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: Theme.of(context).textTheme.titleLarge
+                    ?.copyWith(color: color),
+              ),
+              MiniChart(
+                values: hasValue ? series : const [],
+                color: hasValue ? scheme.primary : scheme.outline,
+              ),
+            ],
+          ),
         ),
       ),
     );
@@ -366,6 +386,7 @@ class _DeviceRow extends StatelessWidget {
     required this.kind,
     required this.record,
     required this.devices,
+    required this.onTap,
   });
 
   final String title;
@@ -373,6 +394,7 @@ class _DeviceRow extends StatelessWidget {
   final String kind;
   final LocalRecord? record;
   final BleDeviceManager? devices;
+  final VoidCallback? onTap;
 
   @override
   Widget build(BuildContext context) {
@@ -398,52 +420,55 @@ class _DeviceRow extends StatelessWidget {
     final clock = when == null
         ? ''
         : '${when.hour.toString().padLeft(2, '0')}:${when.minute.toString().padLeft(2, '0')}';
-    return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-      child: Row(
-        children: [
-          Icon(icon, color: scheme.primary),
-          const SizedBox(width: 12),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(title, maxLines: 1, overflow: TextOverflow.ellipsis),
-                const SizedBox(height: 4),
-                Wrap(
-                  spacing: 8,
-                  crossAxisAlignment: WrapCrossAlignment.center,
-                  children: [
-                    _StatusChip(label: status),
-                    if (worn != null)
-                      Text(
-                        worn,
-                        style: TextStyle(
-                          fontSize: 12,
-                          color: scheme.onSurfaceVariant,
+    return InkWell(
+      onTap: onTap,
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+        child: Row(
+          children: [
+            Icon(icon, color: scheme.primary),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(title, maxLines: 1, overflow: TextOverflow.ellipsis),
+                  const SizedBox(height: 4),
+                  Wrap(
+                    spacing: 8,
+                    crossAxisAlignment: WrapCrossAlignment.center,
+                    children: [
+                      _StatusChip(label: status),
+                      if (worn != null)
+                        Text(
+                          worn,
+                          style: TextStyle(
+                            fontSize: 12,
+                            color: scheme.onSurfaceVariant,
+                          ),
                         ),
-                      ),
-                  ],
-                ),
+                    ],
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(width: 8),
+            Column(
+              crossAxisAlignment: CrossAxisAlignment.end,
+              children: [
+                Text(reading, style: Theme.of(context).textTheme.titleMedium),
+                if (clock.isNotEmpty)
+                  Text(
+                    clock,
+                    style: TextStyle(
+                      fontSize: 12,
+                      color: scheme.onSurfaceVariant,
+                    ),
+                  ),
               ],
             ),
-          ),
-          const SizedBox(width: 8),
-          Column(
-            crossAxisAlignment: CrossAxisAlignment.end,
-            children: [
-              Text(reading, style: Theme.of(context).textTheme.titleMedium),
-              if (clock.isNotEmpty)
-                Text(
-                  clock,
-                  style: TextStyle(
-                    fontSize: 12,
-                    color: scheme.onSurfaceVariant,
-                  ),
-                ),
-            ],
-          ),
-        ],
+          ],
+        ),
       ),
     );
   }

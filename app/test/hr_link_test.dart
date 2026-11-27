@@ -1,3 +1,5 @@
+import 'dart:io';
+
 import 'package:flutter_test/flutter_test.dart';
 import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 
@@ -5,6 +7,7 @@ import 'package:bylwapp/ble/ble_client.dart';
 import 'package:bylwapp/ble/device_manager.dart';
 import 'package:bylwapp/ble/heart_rate/hr_parser.dart';
 import 'package:bylwapp/ble/persist_gate.dart';
+import 'package:bylwapp/ui/device_profile.dart';
 import 'package:bylwapp/journal/canonical_event.dart';
 import 'package:bylwapp/journal/journal_store.dart';
 
@@ -48,10 +51,48 @@ void main() {
     expect(devices.phaseLabel('heart_rate'), '已断开');
   });
 
+  test('series stats use the visible points', () {
+    final stats = seriesStats(const [60, 80, 70]);
+    expect(stats!.min, 60);
+    expect(stats.max, 80);
+    expect(stats.average, 70);
+    expect(stats.count, 3);
+    expect(seriesStats(const []), isNull);
+  });
+
+  test('journal history pages one device at a time', () async {
+    sqfliteFfiInit();
+    databaseFactory = databaseFactoryFfi;
+    final journal = await JournalStore.openPath(_tempDb('page'));
+    for (var i = 0; i < 25; i++) {
+      await journal.append(
+        _event('hr-$i', 'heart_rate', 'heart_rate', {'bpm': 60 + i}),
+      );
+    }
+    await journal.append(
+      _event('bp-1', 'blood_pressure', 'blood_pressure', {
+        'systolic': 120,
+        'diastolic': 80,
+      }),
+    );
+    final page = await journal.matching(
+      match: (row) => sameDevice(row, DeviceProfile.heart),
+      limit: 20,
+    );
+    expect(page, hasLength(20));
+    expect(page.every((row) => row.event.sensorKind == 'heart_rate'), isTrue);
+    final rest = await journal.matching(
+      match: (row) => sameDevice(row, DeviceProfile.heart),
+      limit: 20,
+      offset: 20,
+    );
+    expect(rest, hasLength(5));
+  });
+
   test('H303 packets are parsed and stored in the journal', () async {
     sqfliteFfiInit();
     databaseFactory = databaseFactoryFfi;
-    final journal = await JournalStore.openPath(inMemoryDatabasePath);
+    final journal = await JournalStore.openPath(_tempDb('parse'));
     final samples = [
       const [0x16, 0x48, 0x00, 0x04],
       const [0x06, 0x48],
@@ -89,4 +130,30 @@ void main() {
     expect(rows.last.event.values['sensor_contact'], 'detected');
     expect(rows.last.event.values['raw'], '16 48 00 04');
   });
+}
+
+String _tempDb(String name) =>
+    '${Directory.systemTemp.path}/bylw-$name-${DateTime.now().microsecondsSinceEpoch}.db';
+
+CanonicalEvent _event(
+  String id,
+  String kind,
+  String type,
+  Map<String, Object?> values,
+) {
+  return CanonicalEvent(
+    eventId: id,
+    deviceId: 'phone-1',
+    sessionId: 'sess-1',
+    sensorAddress: 'AA-BB',
+    sensorKind: kind,
+    sensorModel: 'device',
+    measurementType: type,
+    unit: 'unit',
+    monotonicUs: id.hashCode,
+    wallTimeUtc: '2026-11-27T08:00:00Z',
+    clockState: 'NTP_SYNCED',
+    operatingState: 'NOMINAL',
+    values: values,
+  );
 }
