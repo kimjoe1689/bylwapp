@@ -1,7 +1,7 @@
 var __defProp = Object.defineProperty;
 var __name = (target, value) => __defProp(target, "name", { value, configurable: true });
 
-// node_modules/hono/dist/http-exception.js
+// ../../../workspace/worker/node_modules/hono/dist/http-exception.js
 var HTTPException = class extends Error {
   static {
     __name(this, "HTTPException");
@@ -32,15 +32,15 @@ var HTTPException = class extends Error {
   }
 };
 
-// node_modules/hono/dist/request/constants.js
+// ../../../workspace/worker/node_modules/hono/dist/request/constants.js
 var GET_MATCH_RESULT = /* @__PURE__ */ Symbol();
 
-// node_modules/hono/dist/utils/buffer.js
+// ../../../workspace/worker/node_modules/hono/dist/utils/buffer.js
 var bufferToFormData = /* @__PURE__ */ __name((arrayBuffer, contentType) => {
   return new Response(arrayBuffer, { headers: { "Content-Type": contentType.replace(/^[^;]+/, (mediaType) => mediaType.toLowerCase()) } }).formData();
 }, "bufferToFormData");
 
-// node_modules/hono/dist/utils/body.js
+// ../../../workspace/worker/node_modules/hono/dist/utils/body.js
 var MAX_NESTED_OBJECTS = 1e4;
 var isRawRequest = /* @__PURE__ */ __name((request) => "headers" in request, "isRawRequest");
 var parseBody = /* @__PURE__ */ __name(async (request, options = /* @__PURE__ */ Object.create(null)) => {
@@ -106,7 +106,7 @@ var throwNestingLimitExceeded = /* @__PURE__ */ __name(() => {
   throw new Error("Nesting limit exceeded");
 }, "throwNestingLimitExceeded");
 
-// node_modules/hono/dist/utils/url.js
+// ../../../workspace/worker/node_modules/hono/dist/utils/url.js
 var splitPath = /* @__PURE__ */ __name((path) => {
   const paths = path.split("/");
   if (paths[0] === "") paths.shift();
@@ -288,7 +288,7 @@ var getQueryParams = /* @__PURE__ */ __name((url, key) => {
 }, "getQueryParams");
 var decodeURIComponent_ = decodeURIComponent;
 
-// node_modules/hono/dist/request.js
+// ../../../workspace/worker/node_modules/hono/dist/request.js
 var HonoRequest = class {
   static {
     __name(this, "HonoRequest");
@@ -561,7 +561,7 @@ var HonoRequest = class {
   }
 };
 
-// node_modules/hono/dist/utils/html.js
+// ../../../workspace/worker/node_modules/hono/dist/utils/html.js
 var HtmlEscapedCallbackPhase = {
   Stringify: 1,
   BeforeStream: 2,
@@ -591,7 +591,7 @@ var resolveCallback = /* @__PURE__ */ __name(async (str2, phase, preserveCallbac
   else return resStr;
 }, "resolveCallback");
 
-// node_modules/hono/dist/context.js
+// ../../../workspace/worker/node_modules/hono/dist/context.js
 var TEXT_PLAIN = "text/plain; charset=UTF-8";
 var setDefaultContentType = /* @__PURE__ */ __name((contentType, headers) => {
   return {
@@ -972,7 +972,7 @@ var Context = class {
   }, "notFound");
 };
 
-// node_modules/hono/dist/compose.js
+// ../../../workspace/worker/node_modules/hono/dist/compose.js
 var compose = /* @__PURE__ */ __name((middleware, onError, onNotFound) => {
   return (context, next) => {
     let index = -1;
@@ -1004,11 +1004,11 @@ var compose = /* @__PURE__ */ __name((middleware, onError, onNotFound) => {
   };
 }, "compose");
 
-// node_modules/hono/dist/helper/route/index.js
+// ../../../workspace/worker/node_modules/hono/dist/helper/route/index.js
 var matchedRoutes = /* @__PURE__ */ __name((c) => c.req[GET_MATCH_RESULT][0].map(([[, route]]) => route), "matchedRoutes");
 var routePath = /* @__PURE__ */ __name((c, index) => matchedRoutes(c).at(index ?? c.req.routeIndex)?.path ?? "", "routePath");
 
-// node_modules/hono/dist/router.js
+// ../../../workspace/worker/node_modules/hono/dist/router.js
 var METHODS = [
   "get",
   "post",
@@ -1025,10 +1025,10 @@ var UnsupportedPathError = class extends Error {
   }
 };
 
-// node_modules/hono/dist/utils/constants.js
+// ../../../workspace/worker/node_modules/hono/dist/utils/constants.js
 var COMPOSED_HANDLER = "__COMPOSED_HANDLER";
 
-// node_modules/hono/dist/utils/mount.js
+// ../../../workspace/worker/node_modules/hono/dist/utils/mount.js
 var countTrailingSlashes = /* @__PURE__ */ __name((path) => {
   let index = path.length;
   while (index > 0 && path.charCodeAt(index - 1) === 47) index--;
@@ -1083,7 +1083,7 @@ var createMountedRequest = /* @__PURE__ */ __name((c, pathPrefix, routePath2) =>
   return new Request(url, c.req.raw);
 }, "createMountedRequest");
 
-// node_modules/hono/dist/hono-base.js
+// ../../../workspace/worker/node_modules/hono/dist/hono-base.js
 var notFoundHandler = /* @__PURE__ */ __name((c) => {
   return c.text("404 Not Found", 404);
 }, "notFoundHandler");
@@ -1424,10 +1424,10 @@ var Hono = class Hono2 {
   }, "fire");
 };
 
-// node_modules/hono/dist/router/utils.js
+// ../../../workspace/worker/node_modules/hono/dist/router/utils.js
 var createNullObject = /* @__PURE__ */ __name(() => /* @__PURE__ */ Object.create(null), "createNullObject");
 
-// node_modules/hono/dist/router/reg-exp-router/matcher.js
+// ../../../workspace/worker/node_modules/hono/dist/router/reg-exp-router/matcher.js
 var emptyParam = [];
 function match(method, path) {
   const matchers = this.buildAllMatchers();
@@ -1445,7 +1445,7 @@ function match(method, path) {
 }
 __name(match, "match");
 
-// node_modules/hono/dist/router/reg-exp-router/node.js
+// ../../../workspace/worker/node_modules/hono/dist/router/reg-exp-router/node.js
 var LABEL_REG_EXP_STR = "[^/]+";
 var ONLY_WILDCARD_REG_EXP_STR = "[^]*";
 var TAIL_WILDCARD_REG_EXP_STR = "(?:|/[^]*)";
@@ -1533,7 +1533,7 @@ var Node = class Node2 {
   }
 };
 
-// node_modules/hono/dist/router/reg-exp-router/trie.js
+// ../../../workspace/worker/node_modules/hono/dist/router/reg-exp-router/trie.js
 var Trie = class {
   static {
     __name(this, "Trie");
@@ -1611,7 +1611,7 @@ var Trie = class {
   }
 };
 
-// node_modules/hono/dist/router/reg-exp-router/router.js
+// ../../../workspace/worker/node_modules/hono/dist/router/reg-exp-router/router.js
 function endsWithWildcard(keys) {
   const tail = keys[keys.length - 1];
   return tail === "[^]*" || tail === "(?:|/[^]*)";
@@ -1698,7 +1698,7 @@ var RegExpRouter = class {
   }
 };
 
-// node_modules/hono/dist/router/smart-router/router.js
+// ../../../workspace/worker/node_modules/hono/dist/router/smart-router/router.js
 var SmartRouter = class {
   static {
     __name(this, "SmartRouter");
@@ -1748,7 +1748,7 @@ var SmartRouter = class {
   }
 };
 
-// node_modules/hono/dist/router/trie-router/node.js
+// ../../../workspace/worker/node_modules/hono/dist/router/trie-router/node.js
 var emptyParams = createNullObject();
 var order = 0;
 var Node3 = class Node4 {
@@ -1883,7 +1883,7 @@ var Node3 = class Node4 {
   }
 };
 
-// node_modules/hono/dist/router/trie-router/router.js
+// ../../../workspace/worker/node_modules/hono/dist/router/trie-router/router.js
 var TrieRouter = class {
   static {
     __name(this, "TrieRouter");
@@ -1898,7 +1898,7 @@ var TrieRouter = class {
   }
 };
 
-// node_modules/hono/dist/hono.js
+// ../../../workspace/worker/node_modules/hono/dist/hono.js
 var Hono3 = class extends Hono {
   static {
     __name(this, "Hono");
@@ -3934,6 +3934,13 @@ app.post("/api/v1/auth/login", async (c) => {
   }
   return json(200, { token: session.token, role: session.user.role, username: session.user.username });
 });
+app.get("/api/v1/devices/me", async (c) => {
+  const deviceID = await devicePrincipal(c);
+  if (deviceID instanceof Response) {
+    return deviceID;
+  }
+  return json(200, { device_id: deviceID });
+});
 app.post("/api/v1/devices/register", async (c) => {
   const body = await readJSON(c.req.raw);
   if (!body.ok) {
@@ -3975,7 +3982,10 @@ app.post("/api/v1/devices/:device_id/events", async (c) => {
     return deviceID;
   }
   if (c.req.param("device_id") !== deviceID) {
-    return json(403, { error: "device token does not match the path" });
+    return json(403, {
+      error: "device token does not match the path",
+      device_id: deviceID
+    });
   }
   const body = await readJSON(c.req.raw);
   if (!body.ok) {

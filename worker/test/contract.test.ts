@@ -189,6 +189,10 @@ describe("Go API contract", () => {
     expect(badHash.text).toContain("payload_hash does not match");
     const wrongDevice = await call("POST", "/api/v1/devices/other/events", { event, payload_hash: hashed.hash }, deviceToken);
     expect(wrongDevice.status).toBe(403);
+    expect((wrongDevice.json as { device_id: string }).device_id).toBe("phone-1");
+    const me = await call("GET", "/api/v1/devices/me", undefined, deviceToken);
+    expect(me.status, me.text).toBe(200);
+    expect((me.json as { device_id: string }).device_id).toBe("phone-1");
   });
 
   it("returns not_evaluable research exports until rows exist", async () => {

@@ -100,6 +100,14 @@ app.post("/api/v1/auth/login", async (c) => {
   return json(200, { token: session.token, role: session.user.role, username: session.user.username });
 });
 
+app.get("/api/v1/devices/me", async (c) => {
+  const deviceID = await devicePrincipal(c);
+  if (deviceID instanceof Response) {
+    return deviceID;
+  }
+  return json(200, { device_id: deviceID });
+});
+
 app.post("/api/v1/devices/register", async (c) => {
   const body = await readJSON(c.req.raw);
   if (!body.ok) {
@@ -143,7 +151,10 @@ app.post("/api/v1/devices/:device_id/events", async (c) => {
     return deviceID;
   }
   if (c.req.param("device_id") !== deviceID) {
-    return json(403, { error: "device token does not match the path" });
+    return json(403, {
+      error: "device token does not match the path",
+      device_id: deviceID,
+    });
   }
   const body = await readJSON(c.req.raw);
   if (!body.ok) {
