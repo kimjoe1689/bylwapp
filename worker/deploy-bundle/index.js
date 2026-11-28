@@ -3236,7 +3236,9 @@ var TYPES = [
   "worn_state",
   "data_gap",
   "usability_task",
-  "sus"
+  "sus",
+  "raw_event",
+  "gesture"
 ];
 var CLOCKS = ["UNSET", "NTP_SYNCED", "HOLDOVER", "INVALID"];
 var OPS = ["NOMINAL", "BLE_DISCONNECTED", "NETWORK_DEGRADED", "AUTH_FAILURE", "CLOCK_DEGRADED"];
