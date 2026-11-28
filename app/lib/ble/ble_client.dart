@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:bylwapp/ble/ring/ring_actions.dart';
 import 'package:bylwapp/models/health_record.dart';
 
 class BleTrace {
@@ -65,6 +66,11 @@ abstract class BleClient {
   Future<int> syncConnected({required bool temperatureLoggingEnabled});
 
   Future<void> disconnect();
+
+  /// Ring-only controls. Other devices return [RingActionResult.unsupported].
+  Future<RingActionResult> performRingAction(RingAction action);
+
+  Stream<RingNotice> get ringNotices;
 }
 
 class FakeBleClient implements BleClient {
@@ -77,6 +83,8 @@ class FakeBleClient implements BleClient {
       StreamController<BleTrace>.broadcast();
   final StreamController<BleLink> _links =
       StreamController<BleLink>.broadcast();
+  final StreamController<RingNotice> _ringNotices =
+      StreamController<RingNotice>.broadcast();
 
   @override
   Stream<List<BleScanHit>> get scanHits => _controller.stream;
@@ -107,4 +115,11 @@ class FakeBleClient implements BleClient {
 
   @override
   Future<void> disconnect() async {}
+
+  @override
+  Future<RingActionResult> performRingAction(RingAction action) async =>
+      RingActionResult.unsupported;
+
+  @override
+  Stream<RingNotice> get ringNotices => _ringNotices.stream;
 }

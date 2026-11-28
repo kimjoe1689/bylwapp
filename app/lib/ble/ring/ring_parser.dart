@@ -55,6 +55,11 @@ RingParseResult parseRingPacket(
     return const RingParseResult(ignored: true);
   }
   final command = packet[0] & 0xff;
+  if (command == RingPacket.cmdManualHeartRate &&
+      packet.length >= 4 &&
+      packet.length != 16) {
+    return _parseManualHeartRate(packet, now);
+  }
   if (command == RingPacket.cmdBigDataV2) {
     return _parseBigData(packet, today);
   }

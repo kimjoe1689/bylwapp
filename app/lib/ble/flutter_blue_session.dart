@@ -10,6 +10,7 @@ import 'package:bylwapp/ble/bylw_log.dart';
 import 'package:bylwapp/ble/bytes.dart';
 import 'package:bylwapp/ble/device_driver.dart';
 import 'package:bylwapp/ble/driver_registry.dart';
+import 'package:bylwapp/ble/ring/ring_actions.dart';
 import 'package:bylwapp/ble/ring/ring_driver.dart';
 import 'package:bylwapp/ble/ring/ring_parser.dart';
 import 'package:bylwapp/ble/ring/ring_packet.dart';
@@ -54,6 +55,12 @@ class FlutterBlueSession implements BleClient {
   Timer? _ringResync;
   Timer? _ringKeepalive;
   bool _ringBusy = false;
+  bool _measuringHr = false;
+  final StreamController<RingNotice> _ringNotices =
+      StreamController<RingNotice>.broadcast();
+
+  @override
+  Stream<RingNotice> get ringNotices => _ringNotices.stream;
   void Function(HealthMeasurement measurement)? _onMeasurement;
   final BigDataAssembler _assembler = BigDataAssembler();
   final List<List<int>> _inbox = [];
@@ -322,6 +329,7 @@ class FlutterBlueSession implements BleClient {
       });
       await _ringStage('realtime-hr', () async {
         await _writeRing(RingPacket.startRealtimeHeartRate(), 'realtime-hr');
+        _measuringHr = true;
       });
       await _ringStage('history', () async {
         final saved = await _syncRing(
@@ -337,7 +345,7 @@ class FlutterBlueSession implements BleClient {
       return;
     }
     _ringKeepalive = Timer.periodic(const Duration(seconds: 15), (_) {
-      if (!_wantConnected || _syncing || _ringBusy) {
+      if (!_wantConnected || _syncing || _ringBusy || !_measuringHr) {
         return;
       }
       unawaited(
@@ -359,6 +367,106 @@ class FlutterBlueSession implements BleClient {
     } catch (error) {
       bylwLog('stage $name skip $error');
     }
+  }
+
+  @override
+  Future<RingActionResult> performRingAction(RingAction action) async {
+    if (_driver is! YawellRingDriver || !_wantConnected) {
+      return RingActionResult.unsupported;
+    }
+    try {
+      switch (action.id) {
+        case 'find':
+          await _writeRing(RingPacket.findRing(), 'find');
+          return RingActionResult.ok;
+        case 'time':
+          await _writeRing(
+            RingPacket.encodeDateTime(DateTime.now()),
+            'set-time',
+          );
+          return RingActionResult.ok;
+        case 'history':
+          if (_ringBusy) {
+            return const RingActionResult(supported: true, message: '正在同步');
+          }
+          unawaited(_ringBringUp());
+          return const RingActionResult(supported: true, message: '已开始同步');
+        case 'battery':
+          await _writeRing(RingPacket.batteryRequest(), 'battery');
+          final packet = await _awaitCommand(RingPacket.cmdBattery);
+          final battery = packet == null ? null : parseBattery(packet);
+          if (battery == null) return RingActionResult.unsupported;
+          return RingActionResult(
+            supported: true,
+            message: '电量 ${battery.percent}%',
+            batteryPercent: battery.percent,
+            charging: battery.charging,
+          );
+        case 'power':
+          await _writeRing(RingPacket.powerOff(), 'power-off');
+          return RingActionResult.ok;
+        case 'factory':
+          await _writeRing(RingPacket.factoryReset(), 'factory-reset');
+          return RingActionResult.ok;
+        case 'live-start':
+          await _writeRing(RingPacket.startRealtimeHeartRate(), 'realtime-hr');
+          _measuringHr = true;
+          return RingActionResult.ok;
+        case 'live-stop':
+          await _writeRing(RingPacket.stopRealtimeHeartRate(), 'stop-hr');
+          _measuringHr = false;
+          return RingActionResult.ok;
+        case 'auto-read':
+          return await _auto(action, write: false);
+        case 'auto-write':
+          return await _auto(action, write: true);
+        default:
+          return RingActionResult.unsupported;
+      }
+    } catch (error) {
+      bylwLog('ring action ${action.id} skip $error');
+      return RingActionResult.unsupported;
+    }
+  }
+
+  Future<RingActionResult> _auto(
+    RingAction action, {
+    required bool write,
+  }) async {
+    final command = switch (action.metric) {
+      'heart_rate' => RingPacket.cmdAutoHeartRate,
+      'spo2' => RingPacket.cmdAutoSpo2,
+      'stress' => RingPacket.cmdAutoStress,
+      _ => null,
+    };
+    if (command == null) return RingActionResult.unsupported;
+    if (write) {
+      await _writeRing(
+        RingPacket.writeAuto(
+          command,
+          enabled: action.enabled ?? false,
+          minutes: action.minutes ?? 30,
+        ),
+        'auto-${action.metric}',
+      );
+      final ack = await _awaitCommand(command);
+      if (ack == null) return RingActionResult.unsupported;
+      return const RingActionResult(supported: true, message: '已设置');
+    }
+    await _writeRing(
+      RingPacket.readAuto(command),
+      'read-auto-${action.metric}',
+    );
+    final packet = await _awaitCommand(command);
+    if (packet == null || packet.length < 3) {
+      return RingActionResult.unsupported;
+    }
+    return RingActionResult(
+      supported: true,
+      enabled: (packet[1] & 0xff) != 0,
+      minutes: packet[2] & 0xff,
+      message: '已读取',
+    );
   }
 
   Future<void> _writeRing(
@@ -460,11 +568,11 @@ class FlutterBlueSession implements BleClient {
         .join(' ');
     bylwLog('rx $characteristicUuid $hex');
     _trace('rx', characteristicUuid, value);
-    try {
-      _onValue(characteristicUuid, value);
-    } catch (error) {
-      bylwLog('parse failed $error raw=$hex');
-    }
+    unawaited(
+      _onValue(characteristicUuid, value).catchError((Object error) {
+        bylwLog('parse failed $error raw=$hex');
+      }),
+    );
   }
 
   void _trace(String direction, String characteristicUuid, List<int> bytes) {
@@ -480,7 +588,7 @@ class FlutterBlueSession implements BleClient {
     }
   }
 
-  void _onValue(String characteristicUuid, List<int> value) {
+  Future<void> _onValue(String characteristicUuid, List<int> value) async {
     List<int>? packet = value;
     if (normalizeUuid(characteristicUuid) == ringNotifyV2Uuid) {
       packet = _assembler.add(value);
@@ -502,9 +610,23 @@ class FlutterBlueSession implements BleClient {
       packet,
       now: DateTime.now().toUtc(),
     );
-    for (final measurement in measurements) {
-      _onMeasurement?.call(measurement);
+    if (driver is YawellRingDriver &&
+        measurements.isEmpty &&
+        !_ringNotices.isClosed) {
+      final hex = packet
+          .map((byte) => byte.toRadixString(16).padLeft(2, '0'))
+          .join(' ');
+      _ringNotices.add(RingNotice(at: DateTime.now(), hex: hex, label: '戒指通知'));
     }
+    for (final measurement in measurements) {
+      await _deliver(measurement);
+    }
+  }
+
+  Future<void> _deliver(HealthMeasurement measurement) async {
+    final callback = _onMeasurement;
+    if (callback == null) return;
+    await Future<void>.sync(() => callback(measurement));
   }
 
   Future<void> _writeClock(BloodPressureDriver driver) async {
@@ -583,7 +705,7 @@ class FlutterBlueSession implements BleClient {
             final measurements = cursor.consume(packet);
             saved += measurements.length;
             for (final measurement in measurements) {
-              _onMeasurement?.call(measurement);
+              await _deliver(measurement);
             }
           } on TimeoutException {
             bylwLog('stage ${command.label} skip timeout');

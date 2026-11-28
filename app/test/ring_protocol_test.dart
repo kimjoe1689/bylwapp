@@ -40,7 +40,21 @@ void main() {
     final keep = RingPacket.continueRealtimeHeartRate();
     expect(keep[0], 0x1e);
     expect(keep[15], 0x1e);
+    expect(RingPacket.stopRealtimeHeartRate()[0], 0x6a);
     expect(RingPacket.batteryRequest()[0], 0x03);
+  });
+
+  test('ring tools and auto-measure commands use the documented opcodes', () {
+    expect(RingPacket.findRing().sublist(0, 2), [0x10, 0x01]);
+    expect(RingPacket.powerOff()[0], 0x08);
+    expect(RingPacket.factoryReset()[0], 0xff);
+    expect(RingPacket.todaySummary()[0], 0x48);
+    expect(RingPacket.readAuto(RingPacket.cmdAutoHeartRate)[0], 0x16);
+    expect(RingPacket.readAuto(RingPacket.cmdAutoSpo2)[0], 0x2c);
+    expect(RingPacket.readAuto(RingPacket.cmdAutoStress)[0], 0x36);
+    final written = RingPacket.writeAuto(0x16, enabled: true, minutes: 30);
+    expect(written.sublist(0, 4), [0x16, 0x02, 0x01, 30]);
+    expect(RingPacket.checksumValid(written), isTrue);
   });
 
   test('temperature logging command is the R09/R05 preference write', () {
@@ -339,6 +353,16 @@ void main() {
       ),
       isFalse,
     );
+  });
+
+  test('short manual heart-rate notifies still parse', () {
+    final parsed = parseRingPacket(
+      const [0x69, 0x01, 0x00, 0x52],
+      today: today,
+      now: now,
+    );
+    expect(parsed.measurements.single.values['bpm'], 82);
+    expect(parsed.measurements.single.values['source'], 'manual');
   });
 
   test('R09 and R05 are the temperature models', () {

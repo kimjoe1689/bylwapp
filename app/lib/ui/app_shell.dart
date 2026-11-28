@@ -7,6 +7,7 @@ import 'dart:math';
 import 'package:bylwapp/api/device_register.dart';
 import 'package:bylwapp/api/server_client.dart';
 import 'package:bylwapp/ble/ble_client.dart';
+import 'package:bylwapp/ble/bylw_log.dart';
 import 'package:bylwapp/ble/device_manager.dart';
 import 'package:bylwapp/ble/driver_registry.dart';
 import 'package:bylwapp/data/health_repository.dart';
@@ -20,6 +21,7 @@ import 'package:bylwapp/screens/study_screens.dart';
 import 'package:bylwapp/settings/settings_store.dart';
 import 'package:bylwapp/ui/demo_catalog.dart';
 import 'package:bylwapp/ui/home_dashboard.dart';
+import 'package:bylwapp/ui/ring_control_page.dart';
 import 'package:bylwapp/ui/research_page.dart';
 
 class AppShell extends StatefulWidget {
@@ -55,6 +57,8 @@ class _AppShellState extends State<AppShell> {
   late final BleDeviceManager _devices = widget.devices ?? BleDeviceManager();
   StreamSubscription<BleLink>? _links;
   Timer? _syncTimer;
+  Timer? _syncSoon;
+  bool _reconnected = false;
 
   @override
   void initState() {
@@ -64,9 +68,41 @@ class _AppShellState extends State<AppShell> {
     _reload();
     if (widget.autoRegister) {
       _bootSync();
+      _reconnectLastRing();
       _syncTimer = Timer.periodic(const Duration(seconds: 45), (_) {
         _bootSync();
       });
+    }
+  }
+
+  Future<void> _reconnectLastRing() async {
+    if (_reconnected) return;
+    _reconnected = true;
+    final saved = await widget.settings.getLastRing();
+    if (saved == null || !mounted) return;
+    bylwLog('reconnect ring ${saved.name} ${saved.address}');
+    try {
+      await widget.ble.connect(
+        hit: BleScanHit(
+          name: saved.name,
+          address: saved.address,
+          rssi: 0,
+          driverId: 'yawell_ring',
+        ),
+        onMeasurement: (measurement) {
+          _onReading(
+            measurement,
+            BleScanHit(
+              name: saved.name,
+              address: saved.address,
+              rssi: 0,
+              driverId: 'yawell_ring',
+            ),
+          );
+        },
+      );
+    } catch (error) {
+      bylwLog('reconnect ring failed $error');
     }
   }
 
@@ -113,6 +149,7 @@ class _AppShellState extends State<AppShell> {
 
   @override
   void dispose() {
+    _syncSoon?.cancel();
     _syncTimer?.cancel();
     _links?.cancel();
     _devices.removeListener(_onDevices);
@@ -159,6 +196,7 @@ class _AppShellState extends State<AppShell> {
         devices: _devices,
         onReading: _onReading,
         onOpenKind: _openInsight,
+        onConnected: _rememberRing,
       ),
       widget.study == null
           ? const _NeedStudy(text: '提醒需要本地日志。从正常启动进入后即可使用。')
@@ -219,6 +257,15 @@ class _AppShellState extends State<AppShell> {
   }
 
   void _openInsight(String kind) {
+    if (kind == 'ring') {
+      Navigator.of(context).push(
+        MaterialPageRoute<void>(
+          builder: (context) =>
+              RingControlPage(ble: widget.ble, devices: _devices),
+        ),
+      );
+      return;
+    }
     Navigator.of(context).push(
       MaterialPageRoute<void>(
         builder: (context) => DeviceDetailScreen(
@@ -240,7 +287,9 @@ class _AppShellState extends State<AppShell> {
     if (widget.prefs?.showDemo == true) {
       return;
     }
-    final historical = measurement.values['stream'] == 'history';
+    final ringHeart =
+        hit.driverId == 'yawell_ring' && measurement.type == 'heart_rate';
+    final historical = measurement.values['stream'] == 'history' || ringHeart;
     final stamp = measurement.recordedAt.toUtc().microsecondsSinceEpoch;
     if (!_devices.gate.accept(
       history: historical,
@@ -249,6 +298,9 @@ class _AppShellState extends State<AppShell> {
       now: DateTime.now(),
     )) {
       return;
+    }
+    if (ringHeart) {
+      bylwLog('store ring heart_rate ${measurement.values['bpm']}');
     }
     final driver = driverById(hit.driverId);
     await widget.repository.upsertDevice(
@@ -262,6 +314,26 @@ class _AppShellState extends State<AppShell> {
     await widget.repository.insertMeasurement(hit.address, measurement);
     await _journalMeasurement(measurement, hit);
     await _reload();
+    _scheduleUpload();
+  }
+
+  void _scheduleUpload() {
+    final prefs = widget.prefs;
+    if (prefs == null ||
+        !prefs.autoSync ||
+        prefs.deviceToken.isEmpty ||
+        prefs.showDemo) {
+      return;
+    }
+    _syncSoon?.cancel();
+    _syncSoon = Timer(const Duration(seconds: 2), () {
+      if (mounted) setState(() => _syncTick++);
+    });
+  }
+
+  Future<void> _rememberRing(BleScanHit hit) async {
+    if (hit.driverId != 'yawell_ring') return;
+    await widget.settings.setLastRing(name: hit.name, address: hit.address);
   }
 
   Future<void> _journalMeasurement(
@@ -273,7 +345,7 @@ class _AppShellState extends State<AppShell> {
     if (study == null || prefs == null || prefs.showDemo) return;
     study.lastMeasurementAt = measurement.recordedAt.toUtc();
     final worn = measurement.values['sensor_contact'];
-    await study.journal.append(
+    final stored = await study.journal.append(
       CanonicalEvent(
         eventId: pathToken(
           '${hit.address}-${measurement.type}-${measurement.recordedAt.microsecondsSinceEpoch}',
@@ -298,6 +370,9 @@ class _AppShellState extends State<AppShell> {
           if (worn == 'not_detected') 'worn': false,
         },
       ),
+    );
+    bylwLog(
+      'journal ${stored ? 'saved' : 'duplicate'} ${hit.driverId} ${measurement.type}',
     );
     await _reload();
   }

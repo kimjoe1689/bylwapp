@@ -20,7 +20,7 @@ class DeviceProfile {
 
   static const ring = DeviceProfile(
     kind: 'ring',
-    title: '戒指 R09',
+    title: '戒指',
     driverId: 'yawell_ring',
     sensorKind: 'ring',
     types: {
@@ -31,7 +31,7 @@ class DeviceProfile {
       'sleep',
       'sleep_session',
     },
-    guide: '打开戒指蓝牙，到「设备」页扫描名称里带 R09 或 R05 的设备。',
+    guide: '打开戒指蓝牙。已连接过的戒指会在打开应用时自动重连；第一次请到「设备」页扫描 R12、R09 或 R05。',
   );
   static const heart = DeviceProfile(
     kind: 'heart_rate',

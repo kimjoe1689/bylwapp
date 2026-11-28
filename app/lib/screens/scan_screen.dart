@@ -19,6 +19,7 @@ class ScanScreen extends StatefulWidget {
     this.embedded = false,
     this.devices,
     this.onOpenKind,
+    this.onConnected,
   });
 
   final HealthRepository repository;
@@ -28,6 +29,7 @@ class ScanScreen extends StatefulWidget {
   final bool embedded;
   final BleDeviceManager? devices;
   final void Function(String kind)? onOpenKind;
+  final Future<void> Function(BleScanHit hit)? onConnected;
 
   @override
   State<ScanScreen> createState() => _ScanScreenState();
@@ -114,6 +116,7 @@ class _ScanScreenState extends State<ScanScreen>
       if (mounted) {
         setState(() => _scanning = false);
       }
+      await widget.onConnected?.call(hit);
       _message('已连接 ${hit.name}');
     } catch (error) {
       _message('连接失败：$error');
@@ -219,7 +222,8 @@ class _ScanScreenState extends State<ScanScreen>
             onPressed: _busy ? null : _sync,
             child: const Text('读取设备历史'),
           ),
-          if (temperature) const Text('R09 / R05 会先尝试打开体温记录。没有实机时这里不会出现读数。'),
+          if (temperature)
+            const Text('R09 / R05 会先尝试打开体温记录。R12 没有体温，应用不会显示这项。'),
         ],
         const SizedBox(height: 12),
         if (_hits.isEmpty)

@@ -15,6 +15,10 @@ abstract class SettingsStore {
     required String token,
     required String deviceId,
   });
+
+  Future<void> setLastRing({required String name, required String address});
+
+  Future<({String name, String address})?> getLastRing();
 }
 
 class MemorySettingsStore implements SettingsStore {
@@ -27,6 +31,8 @@ class MemorySettingsStore implements SettingsStore {
   String url;
   String token;
   String collectorId;
+  String lastRingName = '';
+  String lastRingAddress = '';
 
   @override
   Future<String> getServerBaseUrl() async => url;
@@ -50,6 +56,21 @@ class MemorySettingsStore implements SettingsStore {
     this.token = token;
     collectorId = deviceId;
   }
+
+  @override
+  Future<void> setLastRing({
+    required String name,
+    required String address,
+  }) async {
+    lastRingName = name;
+    lastRingAddress = address;
+  }
+
+  @override
+  Future<({String name, String address})?> getLastRing() async {
+    if (lastRingAddress.isEmpty) return null;
+    return (name: lastRingName, address: lastRingAddress);
+  }
 }
 
 class SharedPreferencesSettingsStore implements SettingsStore {
@@ -58,6 +79,8 @@ class SharedPreferencesSettingsStore implements SettingsStore {
   static const key = 'server_base_url';
   static const tokenKey = 'device_token';
   static const collectorKey = 'collector_id';
+  static const ringNameKey = 'last_ring_name';
+  static const ringAddressKey = 'last_ring_address';
   final SharedPreferences _prefs;
 
   static Future<SharedPreferencesSettingsStore> open() async {
@@ -90,6 +113,22 @@ class SharedPreferencesSettingsStore implements SettingsStore {
   }) async {
     await _prefs.setString(tokenKey, token);
     await _prefs.setString(collectorKey, deviceId);
+  }
+
+  @override
+  Future<void> setLastRing({
+    required String name,
+    required String address,
+  }) async {
+    await _prefs.setString(ringNameKey, name);
+    await _prefs.setString(ringAddressKey, address);
+  }
+
+  @override
+  Future<({String name, String address})?> getLastRing() async {
+    final address = _prefs.getString(ringAddressKey) ?? '';
+    if (address.isEmpty) return null;
+    return (name: _prefs.getString(ringNameKey) ?? address, address: address);
   }
 }
 

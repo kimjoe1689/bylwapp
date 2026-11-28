@@ -204,7 +204,7 @@ class _HomeDashboardState extends State<HomeDashboard> {
           child: Column(
             children: [
               _DeviceRow(
-                title: '戒指 R09',
+                title: _ringTitle(),
                 icon: Icons.circle_outlined,
                 kind: 'ring',
                 record: _latestKind('ring'),
@@ -251,20 +251,32 @@ class _HomeDashboardState extends State<HomeDashboard> {
     );
   }
 
+  String _ringTitle() {
+    final devices = widget.devices;
+    final live = devices?.device?.name ?? '';
+    if (devices != null && devices.tracksKind('ring') && live.isNotEmpty) {
+      return live;
+    }
+    return '戒指';
+  }
+
   LocalRecord? _latestKind(String kind) {
     for (final record in widget.records) {
       if (record.device.kind == kind ||
-          record.device.name.toUpperCase().contains(
-            kind == 'ring'
-                ? 'R09'
-                : kind == 'heart_rate'
-                ? 'H303'
-                : 'YE680',
-          )) {
+          _nameMatchesKind(record.device.name, kind)) {
         return record;
       }
     }
     return null;
+  }
+
+  bool _nameMatchesKind(String name, String kind) {
+    final upper = name.toUpperCase();
+    if (kind == 'ring') {
+      return RegExp(r'R\d{2}|COLMI|戒指').hasMatch(upper);
+    }
+    if (kind == 'heart_rate') return upper.contains('H303');
+    return upper.contains('YE680');
   }
 }
 

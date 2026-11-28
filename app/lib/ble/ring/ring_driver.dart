@@ -17,7 +17,7 @@ class YawellRingDriver implements HealthDeviceDriver {
   String get kind => 'ring';
 
   @override
-  String get targetModel => 'Colmi R09 / Yawell R05';
+  String get targetModel => 'Colmi R 系列';
 
   @override
   List<GattWatch> get watches => const [

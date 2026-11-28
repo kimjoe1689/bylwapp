@@ -10,13 +10,21 @@ class RingPacket {
 
   static const int cmdSetDateTime = 0x01;
   static const int cmdBattery = 0x03;
+  static const int cmdPowerOff = 0x08;
+  static const int cmdFind = 0x10;
   static const int cmdSyncHeartRate = 0x15;
+  static const int cmdAutoHeartRate = 0x16;
   static const int cmdRealtimeHeartRate = 0x1e;
+  static const int cmdAutoSpo2 = 0x2c;
+  static const int cmdAutoStress = 0x36;
   static const int cmdAutoTempPref = 0x3a;
   static const int cmdSyncStress = 0x37;
   static const int cmdSyncHrv = 0x39;
   static const int cmdSyncActivity = 0x43;
+  static const int cmdTodaySummary = 0x48;
   static const int cmdManualHeartRate = 0x69;
+  static const int cmdStopHeartRate = 0x6a;
+  static const int cmdFactoryReset = 0xff;
   static const int cmdNotification = 0x73;
   static const int cmdBigDataV2 = 0xbc;
 
@@ -114,6 +122,32 @@ class RingPacket {
   /// Keep-alive. Gadgetbridge repeats 0x1e while the session is open.
   static List<int> continueRealtimeHeartRate() =>
       build(const [cmdRealtimeHeartRate]);
+
+  static List<int> stopRealtimeHeartRate() => build(const [cmdStopHeartRate]);
+
+  static List<int> findRing() => build(const [cmdFind, 0x01]);
+
+  static List<int> powerOff() => build(const [cmdPowerOff]);
+
+  static List<int> factoryReset() => build(const [cmdFactoryReset]);
+
+  static List<int> todaySummary() => build(const [cmdTodaySummary]);
+
+  static List<int> readAuto(int command) => build([command & 0xff]);
+
+  /// Write preference: subcommand 0x02, enabled, interval minutes.
+  static List<int> writeAuto(
+    int command, {
+    required bool enabled,
+    required int minutes,
+  }) {
+    return build([
+      command & 0xff,
+      prefWrite,
+      enabled ? 0x01 : 0x00,
+      minutes < 1 ? 1 : (minutes > 240 ? 240 : minutes),
+    ]);
+  }
 
   /// Turns temperature logging on or off. R09 and R05 only; history stays empty until this is on.
   static List<int> temperatureLogging({required bool enabled}) {
