@@ -91,8 +91,9 @@ class RingPacket {
     ];
   }
 
+  /// Colmi/QRing stores the phone's local wall clock as BCD, not UTC.
   static List<int> encodeDateTime(DateTime time) {
-    final wall = time.toUtc();
+    final wall = time.toLocal();
     return build([
       cmdSetDateTime,
       _decimalAsHex(wall.year % 100),
@@ -103,6 +104,16 @@ class RingPacket {
       _decimalAsHex(wall.second),
     ]);
   }
+
+  static List<int> batteryRequest() => build(const [cmdBattery]);
+
+  /// Starts a manual/realtime heart-rate session: 0x69 0x01 0x01.
+  static List<int> startRealtimeHeartRate() =>
+      build(const [cmdManualHeartRate, 0x01, 0x01]);
+
+  /// Keep-alive. Gadgetbridge repeats 0x1e while the session is open.
+  static List<int> continueRealtimeHeartRate() =>
+      build(const [cmdRealtimeHeartRate]);
 
   /// Turns temperature logging on or off. R09 and R05 only; history stays empty until this is on.
   static List<int> temperatureLogging({required bool enabled}) {

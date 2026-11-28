@@ -1,5 +1,6 @@
 import 'package:flutter_test/flutter_test.dart';
 
+import 'package:bylwapp/ble/persist_gate.dart';
 import 'package:bylwapp/ble/ring/ring_packet.dart';
 import 'package:bylwapp/ble/ring/ring_parser.dart';
 import 'package:bylwapp/ble/ring/ring_sync.dart';
@@ -21,12 +22,25 @@ void main() {
     expect(RingPacket.checksumValid(find), isFalse);
   });
 
-  test('encodes the ring clock as decimal nibbles', () {
-    final packet = RingPacket.encodeDateTime(
-      DateTime.utc(2026, 11, 27, 8, 15, 9),
-    );
+  test('encodes the ring clock as local decimal nibbles', () {
+    final packet = RingPacket.encodeDateTime(DateTime(2026, 11, 27, 8, 15, 9));
     expect(packet.sublist(0, 7), [0x01, 0x26, 0x11, 0x27, 0x08, 0x15, 0x09]);
     expect(packet[15], 0x85);
+    final utc = DateTime.utc(2026, 11, 27, 8, 15, 9).toLocal();
+    final shifted = RingPacket.encodeDateTime(
+      DateTime.utc(2026, 11, 27, 8, 15, 9),
+    );
+    expect(shifted[4], ((utc.hour ~/ 10) << 4) | (utc.hour % 10));
+  });
+
+  test('realtime heart rate starts with 0x69 and continues with 0x1e', () {
+    final start = RingPacket.startRealtimeHeartRate();
+    expect(start.sublist(0, 3), [0x69, 0x01, 0x01]);
+    expect(RingPacket.checksumValid(start), isTrue);
+    final keep = RingPacket.continueRealtimeHeartRate();
+    expect(keep[0], 0x1e);
+    expect(keep[15], 0x1e);
+    expect(RingPacket.batteryRequest()[0], 0x03);
   });
 
   test('temperature logging command is the R09/R05 preference write', () {
@@ -266,6 +280,65 @@ void main() {
     final history = cursor.nextCommand()!;
     expect(history.bytes.sublist(0, 2), [0xBC, 0x25]);
     expect(history.bytes.sublist(2), [0x01, 0x00, 0x3E, 0x81, 0x02]);
+  });
+
+  test('a timed-out ring command skips that stage and keeps going', () {
+    final cursor = RingSyncCursor(now: now, temperatureCapable: false);
+    expect(cursor.nextCommand()!.label, 'activity-0');
+    cursor.skipCurrent();
+    expect(cursor.daysAgo, 1);
+    expect(cursor.awaitingMore, isFalse);
+    expect(cursor.nextCommand()!.label, 'activity-1');
+  });
+
+  test('history rows bypass the realtime persist gate', () {
+    final gate = PersistGate(interval: const Duration(seconds: 5));
+    final now = DateTime.utc(2026, 11, 27, 8);
+    expect(
+      gate.accept(
+        history: true,
+        streamKey: 'addr|heart_rate',
+        historyKey: 'addr|heart_rate|1',
+        now: now,
+      ),
+      isTrue,
+    );
+    expect(
+      gate.accept(
+        history: true,
+        streamKey: 'addr|heart_rate',
+        historyKey: 'addr|heart_rate|1',
+        now: now,
+      ),
+      isFalse,
+    );
+    expect(
+      gate.accept(
+        history: true,
+        streamKey: 'addr|heart_rate',
+        historyKey: 'addr|heart_rate|2',
+        now: now,
+      ),
+      isTrue,
+    );
+    expect(
+      gate.accept(
+        history: false,
+        streamKey: 'addr|heart_rate',
+        historyKey: 'ignored',
+        now: now,
+      ),
+      isTrue,
+    );
+    expect(
+      gate.accept(
+        history: false,
+        streamKey: 'addr|heart_rate',
+        historyKey: 'ignored',
+        now: now.add(const Duration(seconds: 1)),
+      ),
+      isFalse,
+    );
   });
 
   test('R09 and R05 are the temperature models', () {

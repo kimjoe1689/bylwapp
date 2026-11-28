@@ -184,7 +184,22 @@ class RingSyncCursor {
       _requestOpen = false;
       _advance();
     }
-    return parsed.measurements;
+    return [
+      for (final measurement in parsed.measurements)
+        HealthMeasurement(
+          type: measurement.type,
+          unit: measurement.unit,
+          recordedAt: measurement.recordedAt,
+          values: {...measurement.values, 'stream': 'history'},
+        ),
+    ];
+  }
+
+  /// Drops the command that timed out and moves to the next stage.
+  void skipCurrent() {
+    _awaitingTemperatureAck = false;
+    _requestOpen = false;
+    _advance();
   }
 
   void _advance() {

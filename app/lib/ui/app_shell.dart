@@ -240,9 +240,13 @@ class _AppShellState extends State<AppShell> {
     if (widget.prefs?.showDemo == true) {
       return;
     }
-    if (!_devices.gate.shouldPersist(
-      '${hit.address}|${measurement.type}',
-      DateTime.now(),
+    final historical = measurement.values['stream'] == 'history';
+    final stamp = measurement.recordedAt.toUtc().microsecondsSinceEpoch;
+    if (!_devices.gate.accept(
+      history: historical,
+      streamKey: '${hit.address}|${measurement.type}',
+      historyKey: '${hit.address}|${measurement.type}|$stamp',
+      now: DateTime.now(),
     )) {
       return;
     }

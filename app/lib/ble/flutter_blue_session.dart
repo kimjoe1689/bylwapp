@@ -11,6 +11,7 @@ import 'package:bylwapp/ble/bytes.dart';
 import 'package:bylwapp/ble/device_driver.dart';
 import 'package:bylwapp/ble/driver_registry.dart';
 import 'package:bylwapp/ble/ring/ring_driver.dart';
+import 'package:bylwapp/ble/ring/ring_parser.dart';
 import 'package:bylwapp/ble/ring/ring_packet.dart';
 import 'package:bylwapp/ble/ring/ring_sync.dart';
 import 'package:bylwapp/ble/uuids.dart';
@@ -50,6 +51,9 @@ class FlutterBlueSession implements BleClient {
   bool _armAgain = false;
   String _lastRxKey = '';
   int _lastRxUs = 0;
+  Timer? _ringResync;
+  Timer? _ringKeepalive;
+  bool _ringBusy = false;
   void Function(HealthMeasurement measurement)? _onMeasurement;
   final BigDataAssembler _assembler = BigDataAssembler();
   final List<List<int>> _inbox = [];
@@ -197,6 +201,10 @@ class FlutterBlueSession implements BleClient {
     final name = _connectedName;
     final driverId = _driver?.id;
     _wantConnected = false;
+    _ringResync?.cancel();
+    _ringKeepalive?.cancel();
+    _ringResync = null;
+    _ringKeepalive = null;
     await _cancelChrSubs();
     await _connSub?.cancel();
     _connSub = null;
@@ -261,7 +269,7 @@ class FlutterBlueSession implements BleClient {
           continue;
         }
         final sub = characteristic.onValueReceived.listen(
-          (value) => _handleRx(watch.characteristicUuid, value, 'chr'),
+          (value) => _handleRx(watch.characteristicUuid, value),
           onError: (Object error) => bylwLog('chr stream $error'),
         );
         _valueSubs.add(sub);
@@ -280,10 +288,122 @@ class FlutterBlueSession implements BleClient {
       bylwLog('arm failed $error');
     } finally {
       _arming = false;
-      if (_armAgain) {
-        _armAgain = false;
+      final again = _armAgain;
+      _armAgain = false;
+      if (again) {
         await _arm();
+      } else if (_driver is YawellRingDriver && _wantConnected) {
+        unawaited(_ringBringUp());
       }
+    }
+  }
+
+  Future<void> _ringBringUp() async {
+    if (_ringBusy || _driver is! YawellRingDriver || !_wantConnected) {
+      return;
+    }
+    _ringBusy = true;
+    _ringResync?.cancel();
+    _ringKeepalive?.cancel();
+    try {
+      await _ringStage('set-time', () async {
+        await _writeRing(RingPacket.encodeDateTime(DateTime.now()), 'set-time');
+        await _awaitCommand(RingPacket.cmdSetDateTime);
+      });
+      await _ringStage('battery', () async {
+        await _writeRing(RingPacket.batteryRequest(), 'battery');
+        final packet = await _awaitCommand(RingPacket.cmdBattery);
+        final battery = packet == null ? null : parseBattery(packet);
+        if (battery != null) {
+          bylwLog(
+            'stage battery percent=${battery.percent} charging=${battery.charging}',
+          );
+        }
+      });
+      await _ringStage('realtime-hr', () async {
+        await _writeRing(RingPacket.startRealtimeHeartRate(), 'realtime-hr');
+      });
+      await _ringStage('history', () async {
+        final saved = await _syncRing(
+          (_driver as YawellRingDriver).supportsTemperature(_connectedName),
+          temperatureLoggingEnabled: false,
+        );
+        bylwLog('stage history saved=$saved');
+      });
+    } finally {
+      _ringBusy = false;
+    }
+    if (!_wantConnected || _driver is! YawellRingDriver) {
+      return;
+    }
+    _ringKeepalive = Timer.periodic(const Duration(seconds: 15), (_) {
+      if (!_wantConnected || _syncing || _ringBusy) {
+        return;
+      }
+      unawaited(
+        _writeRing(RingPacket.continueRealtimeHeartRate(), 'hr-continue'),
+      );
+    });
+    _ringResync = Timer.periodic(const Duration(minutes: 5), (_) {
+      if (_wantConnected && !_ringBusy) {
+        unawaited(_ringBringUp());
+      }
+    });
+  }
+
+  Future<void> _ringStage(String name, Future<void> Function() body) async {
+    bylwLog('stage $name start');
+    try {
+      await body();
+      bylwLog('stage $name end');
+    } catch (error) {
+      bylwLog('stage $name skip $error');
+    }
+  }
+
+  Future<void> _writeRing(
+    List<int> bytes,
+    String label, {
+    String serviceUuid = ringServiceV1Uuid,
+    String characteristicUuid = ringWriteUuid,
+  }) async {
+    final characteristic = _find(serviceUuid, characteristicUuid);
+    final hex = bytes
+        .map((byte) => byte.toRadixString(16).padLeft(2, '0'))
+        .join(' ');
+    if (characteristic == null) {
+      bylwLog('tx $label missing $characteristicUuid');
+      return;
+    }
+    bylwLog('tx $label $hex');
+    _trace('tx', characteristicUuid, bytes);
+    try {
+      await characteristic.write(bytes, withoutResponse: bytes.length <= 20);
+    } catch (error) {
+      bylwLog('tx $label without-response failed $error');
+      await characteristic.write(bytes, withoutResponse: false);
+    }
+  }
+
+  Future<List<int>?> _awaitCommand(int command) async {
+    _syncing = true;
+    _inbox.clear();
+    try {
+      final deadline = DateTime.now().add(const Duration(seconds: 8));
+      while (true) {
+        final remaining = deadline.difference(DateTime.now());
+        if (remaining.isNegative) {
+          return null;
+        }
+        final packet = await _nextPacket(remaining);
+        if (packet.isNotEmpty && (packet[0] & 0xff) == command) {
+          return packet;
+        }
+      }
+    } on TimeoutException {
+      return null;
+    } finally {
+      _syncing = false;
     }
   }
 
@@ -302,7 +422,7 @@ class FlutterBlueSession implements BleClient {
       if (!_watched.contains(uuid)) {
         return;
       }
-      _handleRx(uuid, event.value, 'event');
+      _handleRx(uuid, event.value);
     }, onError: (Object error) => bylwLog('event stream $error'));
   }
 
@@ -327,7 +447,7 @@ class FlutterBlueSession implements BleClient {
     );
   }
 
-  void _handleRx(String characteristicUuid, List<int> value, String via) {
+  void _handleRx(String characteristicUuid, List<int> value) {
     final key = '$characteristicUuid:${value.join(',')}';
     final now = DateTime.now().microsecondsSinceEpoch;
     if (key == _lastRxKey && now - _lastRxUs < 150000) {
@@ -338,7 +458,7 @@ class FlutterBlueSession implements BleClient {
     final hex = value
         .map((byte) => byte.toRadixString(16).padLeft(2, '0'))
         .join(' ');
-    bylwLog('rx $via ${normalizeUuid(characteristicUuid)} $hex');
+    bylwLog('rx $characteristicUuid $hex');
     _trace('rx', characteristicUuid, value);
     try {
       _onValue(characteristicUuid, value);
@@ -424,25 +544,51 @@ class FlutterBlueSession implements BleClient {
           command.characteristicUuid,
         );
         if (characteristic == null) {
-          throw StateError('缺少特征 ${command.characteristicUuid}');
+          bylwLog(
+            'stage ${command.label} skip missing ${command.characteristicUuid}',
+          );
+          cursor.skipCurrent();
+          continue;
         }
+        final hex = command.bytes
+            .map((byte) => byte.toRadixString(16).padLeft(2, '0'))
+            .join(' ');
+        bylwLog('tx ${command.label} $hex');
         _trace('tx', command.characteristicUuid, command.bytes);
-        await characteristic.write(
-          command.bytes,
-          allowLongWrite: command.bytes.length > 20,
-        );
+        try {
+          await characteristic.write(
+            command.bytes,
+            withoutResponse: command.bytes.length <= 20,
+            allowLongWrite: command.bytes.length > 20,
+          );
+        } catch (error) {
+          bylwLog('tx ${command.label} retry $error');
+          await characteristic.write(
+            command.bytes,
+            allowLongWrite: command.bytes.length > 20,
+          );
+        }
         final deadline = DateTime.now().add(const Duration(seconds: 8));
-        while (cursor.awaitingMore) {
+        var timedOut = false;
+        while (cursor.awaitingMore && !timedOut) {
           final remaining = deadline.difference(DateTime.now());
           if (remaining.isNegative) {
-            // TODO(hardware): the ring sometimes never answers; Gadgetbridge aborts after 30s.
-            throw TimeoutException('等待戒指响应超时（${command.label}）');
+            bylwLog('stage ${command.label} skip timeout');
+            cursor.skipCurrent();
+            timedOut = true;
+            break;
           }
-          final packet = await _nextPacket(remaining);
-          final measurements = cursor.consume(packet);
-          saved += measurements.length;
-          for (final measurement in measurements) {
-            _onMeasurement?.call(measurement);
+          try {
+            final packet = await _nextPacket(remaining);
+            final measurements = cursor.consume(packet);
+            saved += measurements.length;
+            for (final measurement in measurements) {
+              _onMeasurement?.call(measurement);
+            }
+          } on TimeoutException {
+            bylwLog('stage ${command.label} skip timeout');
+            cursor.skipCurrent();
+            timedOut = true;
           }
         }
       }
