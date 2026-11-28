@@ -4,6 +4,7 @@ import 'package:bylwapp/ble/persist_gate.dart';
 import 'package:bylwapp/ble/ring/ring_packet.dart';
 import 'package:bylwapp/ble/ring/ring_parser.dart';
 import 'package:bylwapp/ble/ring/ring_sync.dart';
+import 'package:bylwapp/ui/ring_control_page.dart';
 
 void main() {
   final today = DateTime.utc(2026, 11, 27);
@@ -353,6 +354,20 @@ void main() {
       ),
       isFalse,
     );
+  });
+
+  test('ring notices hide the realtime heart-rate stream', () {
+    expect(ringNoticeLabel(const [0x69, 0x01, 0x00, 0x52]), isNull);
+    expect(ringNoticeLabel(const [0x1e]), isNull);
+    expect(ringNoticeLabel(const [0x03, 0x64]), '电量 100%');
+    expect(ringNoticeLabel(const [0x10, 0x01]), '戒指已响应寻找');
+    expect(ringNoticeLabel(const [0x55]), 'unknown 0x55');
+  });
+
+  test('distance under a kilometre stays in meters', () {
+    expect(formatRingDistance(38), '38 米');
+    expect(formatRingDistance(6120), '6.1 公里');
+    expect(formatRingSleep(null), '还没有睡眠记录');
   });
 
   test('short manual heart-rate notifies still parse', () {

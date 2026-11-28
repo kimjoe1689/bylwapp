@@ -45,3 +45,35 @@ Future<DevicePairing> registerDevice({
     }
   }
 }
+
+/// Device id that owns [token], or null when the server has no such route yet.
+Future<String?> deviceForToken({
+  required String baseUrl,
+  required String token,
+  http.Client? client,
+}) async {
+  if (token.isEmpty) return null;
+  final httpClient = client ?? http.Client();
+  final root = baseUrl.endsWith('/')
+      ? baseUrl.substring(0, baseUrl.length - 1)
+      : baseUrl;
+  try {
+    final response = await httpClient
+        .get(
+          Uri.parse('$root/api/v1/devices/me'),
+          headers: {'Authorization': 'Bearer $token'},
+        )
+        .timeout(const Duration(seconds: 8));
+    if (response.statusCode != 200) return null;
+    final decoded = jsonDecode(response.body);
+    if (decoded is Map && decoded['device_id'] is String) {
+      final id = (decoded['device_id'] as String).trim();
+      return id.isEmpty ? null : id;
+    }
+    return null;
+  } catch (_) {
+    return null;
+  } finally {
+    if (client == null) httpClient.close();
+  }
+}

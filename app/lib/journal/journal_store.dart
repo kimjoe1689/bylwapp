@@ -80,6 +80,21 @@ class JournalStore {
         rows.single['canonical_json'] == body;
   }
 
+  /// Rewrites the stored event, keeping [event.eventId], and marks it pending.
+  Future<void> replace(CanonicalEvent event) async {
+    await _db.update(
+      'journal',
+      {
+        'canonical_json': event.canonicalJson,
+        'payload_hash': event.payloadHash,
+        'sync_state': 'pending',
+        'last_error': '',
+      },
+      where: 'event_id = ?',
+      whereArgs: [event.eventId],
+    );
+  }
+
   Future<String?> latestSyncedAt() async {
     final rows = await _db.query(
       'journal',

@@ -91,6 +91,36 @@ RingParseResult parseRingPacket(
   }
 }
 
+/// A short label for the event feed. Null hides the realtime heart-rate stream.
+String? ringNoticeLabel(List<int> packet) {
+  if (packet.isEmpty) return null;
+  final command = packet[0] & 0xff;
+  if (command == RingPacket.cmdManualHeartRate ||
+      command == RingPacket.cmdRealtimeHeartRate) {
+    return null;
+  }
+  final battery = parseBattery(packet);
+  if (battery != null) {
+    return '电量 ${battery.percent}%';
+  }
+  if (command == RingPacket.cmdBattery && packet.length >= 2) {
+    return '电量 ${packet[1] & 0xff}%';
+  }
+  final live = parseLiveActivity(packet);
+  if (live != null) {
+    return '步数 ${live.steps}';
+  }
+  return switch (command) {
+    RingPacket.cmdSetDateTime => '时间已同步',
+    RingPacket.cmdFind => '戒指已响应寻找',
+    RingPacket.cmdSyncHeartRate => '心率历史',
+    RingPacket.cmdSyncActivity || RingPacket.cmdTodaySummary => '今日活动',
+    RingPacket.cmdBigDataV2 => '历史数据',
+    RingPacket.cmdStopHeartRate => '已停止心率',
+    _ => 'unknown 0x${command.toRadixString(16).padLeft(2, '0')}',
+  };
+}
+
 BatteryStatus? parseBattery(List<int> packet) {
   if (packet.length < 3 || (packet[0] & 0xff) != RingPacket.cmdBattery) {
     return null;

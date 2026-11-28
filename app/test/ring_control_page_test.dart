@@ -15,13 +15,22 @@ void main() {
     expect(find.text('Colmi R12'), findsOneWidget);
     expect(find.textContaining('体温'), findsNothing);
     expect(find.text('已连接'), findsOneWidget);
-    expect(find.textContaining('电量 78%'), findsOneWidget);
+    expect(find.textContaining('电量 78%'), findsWidgets);
+    final scroll = tester.state<ScrollableState>(find.byType(Scrollable).first);
+    expect(scroll.position.pixels, 0);
     expect(find.textContaining('14:20'), findsOneWidget);
     expect(find.text('72'), findsWidgets);
     expect(find.text('找戒指'), findsOneWidget);
     await tester.scrollUntilVisible(find.text('恢复出厂'), 300);
     expect(find.text('恢复出厂'), findsOneWidget);
     expect(find.text('不支持'), findsOneWidget);
-    expect(find.textContaining('73 12'), findsOneWidget);
+    expect(find.textContaining('6.1 公里'), findsOneWidget);
+    expect(find.textContaining('昨夜睡眠'), findsOneWidget);
+    expect(find.textContaining('unknown 0x55'), findsOneWidget);
+    expect(find.textContaining('55 00'), findsNothing);
+    expect(find.text('开发者信息'), findsOneWidget);
+    await tester.tap(find.text('开发者信息'));
+    await tester.pump();
+    expect(find.textContaining('55 00'), findsOneWidget);
   });
 }

@@ -1,8 +1,7 @@
 import 'dart:async';
+import 'dart:math';
 
 import 'package:material_ui/material_ui.dart';
-
-import 'dart:math';
 
 import 'package:bylwapp/api/device_register.dart';
 import 'package:bylwapp/api/server_client.dart';
@@ -108,6 +107,7 @@ class _AppShellState extends State<AppShell> {
 
   Future<void> _bootSync() async {
     await _ensureRegistered();
+    await _alignDevice();
     final prefs = widget.prefs;
     if (prefs == null || !prefs.autoSync || prefs.deviceToken.isEmpty) {
       return;
@@ -145,6 +145,20 @@ class _AppShellState extends State<AppShell> {
     } finally {
       _registering = false;
     }
+  }
+
+  Future<void> _alignDevice() async {
+    final prefs = widget.prefs;
+    if (prefs == null || prefs.deviceToken.isEmpty) return;
+    final base = await widget.settings.getServerBaseUrl();
+    final known = await deviceForToken(baseUrl: base, token: prefs.deviceToken);
+    if (known == null || known.isEmpty || known == prefs.collectorId) return;
+    prefs.collectorId = known;
+    await widget.settings.setDeviceCredential(
+      token: prefs.deviceToken,
+      deviceId: known,
+    );
+    bylwLog('align collector $known');
   }
 
   @override
@@ -260,8 +274,11 @@ class _AppShellState extends State<AppShell> {
     if (kind == 'ring') {
       Navigator.of(context).push(
         MaterialPageRoute<void>(
-          builder: (context) =>
-              RingControlPage(ble: widget.ble, devices: _devices),
+          builder: (context) => RingControlPage(
+            ble: widget.ble,
+            devices: _devices,
+            journal: widget.study?.journal,
+          ),
         ),
       );
       return;
@@ -287,9 +304,7 @@ class _AppShellState extends State<AppShell> {
     if (widget.prefs?.showDemo == true) {
       return;
     }
-    final ringHeart =
-        hit.driverId == 'yawell_ring' && measurement.type == 'heart_rate';
-    final historical = measurement.values['stream'] == 'history' || ringHeart;
+    final historical = measurement.values['stream'] == 'history';
     final stamp = measurement.recordedAt.toUtc().microsecondsSinceEpoch;
     if (!_devices.gate.accept(
       history: historical,
@@ -299,7 +314,7 @@ class _AppShellState extends State<AppShell> {
     )) {
       return;
     }
-    if (ringHeart) {
+    if (hit.driverId == 'yawell_ring' && measurement.type == 'heart_rate') {
       bylwLog('store ring heart_rate ${measurement.values['bpm']}');
     }
     final driver = driverById(hit.driverId);

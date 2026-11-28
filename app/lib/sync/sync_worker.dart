@@ -16,6 +16,17 @@ class SyncFaults {
   final bool clockSkew;
 }
 
+class IngestException implements Exception {
+  IngestException(this.statusCode, this.message, {this.deviceId});
+
+  final int statusCode;
+  final String message;
+  final String? deviceId;
+
+  @override
+  String toString() => 'Exception: ingest $statusCode $message';
+}
+
 class SyncWorker {
   SyncWorker({
     required this.journal,
@@ -23,6 +34,9 @@ class SyncWorker {
     required this.token,
     http.Client? client,
     this.faults = const SyncFaults(),
+    this.deviceId = '',
+    this.renewToken,
+    this.onDevice,
   }) : _client = client ?? http.Client();
 
   final JournalStore journal;
@@ -31,38 +45,71 @@ class SyncWorker {
   final http.Client _client;
   final SyncFaults faults;
 
+  /// When set, pending rows are moved onto this device before upload.
+  /// Empty keeps each event on the device id it was journaled with.
+  final String deviceId;
+
+  /// Issues a token for the device id already stored on a rejected event.
+  final Future<String?> Function(String deviceId)? renewToken;
+
+  /// Called when a 403 names the device that owns the current token.
+  final void Function(String deviceId)? onDevice;
+
   Future<int> syncOnce() async {
     final pending = await journal.pending();
     var synced = 0;
-    for (final record in pending) {
+    var activeToken = token;
+    var activeDevice = deviceId;
+    var renewed = false;
+    for (final original in pending) {
+      var record = original;
+      if (activeDevice.isNotEmpty && record.event.deviceId != activeDevice) {
+        record = await _rebind(record, activeDevice);
+      }
       final attempts = record.attempts + 1;
       try {
-        final result = await _post(record);
-        if (result == 'stored' || result == 'duplicate') {
-          await journal.mark(
-            record.event.eventId,
-            state: 'synced',
-            attempts: attempts,
-            serverReceivedAt: DateTime.now().toUtc().toIso8601String(),
-          );
-          synced++;
-        } else if (result == 'conflict') {
-          await journal.mark(
-            record.event.eventId,
-            state: 'conflict',
-            error: 'server kept the first receipt',
-            attempts: attempts,
-          );
-        } else if (result == 'auth_blocked') {
-          await journal.mark(
-            record.event.eventId,
-            state: 'auth_blocked',
-            error: 'device token rejected',
-            attempts: attempts,
-          );
+        final result = await _post(record, activeToken);
+        if (await _apply(record, result, attempts)) synced++;
+      } on IngestException catch (error) {
+        final named = error.deviceId;
+        if (error.statusCode == 403 &&
+            named != null &&
+            named.isNotEmpty &&
+            named != record.event.deviceId) {
+          activeDevice = named;
+          onDevice?.call(named);
+          record = await _rebind(record, named);
+          try {
+            final result = await _post(record, activeToken);
+            if (await _apply(record, result, attempts)) synced++;
+            continue;
+          } on IngestException catch (again) {
+            await _fail(record, attempts, again);
+            continue;
+          }
         }
+        if (error.statusCode == 403 && !renewed && renewToken != null) {
+          final next = await renewToken!(record.event.deviceId);
+          if (next != null && next.isNotEmpty) {
+            activeToken = next;
+            renewed = true;
+            try {
+              final result = await _post(record, activeToken);
+              if (await _apply(record, result, attempts)) synced++;
+              continue;
+            } on IngestException catch (again) {
+              await _fail(record, attempts, again);
+              continue;
+            }
+          }
+        }
+        await _fail(record, attempts, error);
       } catch (error) {
-        final read = await _read(record.event.deviceId, record.event.eventId);
+        final read = await _read(
+          record.event.deviceId,
+          record.event.eventId,
+          activeToken,
+        );
         if (read == record.payloadHash) {
           await journal.mark(
             record.event.eventId,
@@ -93,7 +140,57 @@ class SyncWorker {
     return synced;
   }
 
-  Future<String> _post(JournalRecord record) async {
+  Future<bool> _apply(JournalRecord record, String result, int attempts) async {
+    if (result == 'stored' || result == 'duplicate') {
+      await journal.mark(
+        record.event.eventId,
+        state: 'synced',
+        attempts: attempts,
+        serverReceivedAt: DateTime.now().toUtc().toIso8601String(),
+      );
+      return true;
+    }
+    if (result == 'conflict') {
+      await journal.mark(
+        record.event.eventId,
+        state: 'conflict',
+        error: 'server kept the first receipt',
+        attempts: attempts,
+      );
+    } else if (result == 'auth_blocked') {
+      await journal.mark(
+        record.event.eventId,
+        state: 'auth_blocked',
+        error: 'device token rejected',
+        attempts: attempts,
+      );
+    }
+    return false;
+  }
+
+  Future<void> _fail(JournalRecord record, int attempts, Object error) async {
+    await journal.mark(
+      record.event.eventId,
+      state: attempts >= 3 ? 'retry_failed' : 'pending',
+      error: '$error',
+      attempts: attempts,
+    );
+  }
+
+  Future<JournalRecord> _rebind(JournalRecord record, String deviceId) async {
+    final event = record.event.rebindDevice(deviceId);
+    await journal.replace(event);
+    return JournalRecord(
+      event: event,
+      payloadHash: event.payloadHash,
+      syncState: 'pending',
+      attempts: record.attempts,
+      lastError: '',
+      serverReceivedAt: record.serverReceivedAt,
+    );
+  }
+
+  Future<String> _post(JournalRecord record, String bearer) async {
     if (faults.networkDown) {
       throw Exception('network down');
     }
@@ -101,7 +198,7 @@ class SyncWorker {
         .post(
           _uri('/api/v1/devices/${record.event.deviceId}/events'),
           headers: {
-            'Authorization': 'Bearer $token',
+            'Authorization': 'Bearer $bearer',
             'Content-Type': 'application/json',
           },
           body: jsonEncode({
@@ -116,27 +213,34 @@ class SyncWorker {
     if (response.statusCode == 401) {
       return 'auth_blocked';
     }
-    final body = jsonDecode(response.body);
-    if (body is Map && body['result'] is String) {
+    Map<String, dynamic>? body;
+    try {
+      final decoded = jsonDecode(response.body);
+      if (decoded is Map<String, dynamic>) body = decoded;
+    } catch (_) {}
+    if (body != null && body['result'] is String) {
       return body['result'] as String;
     }
-    throw Exception('ingest ${response.statusCode}');
+    final message = body != null && body['error'] is String
+        ? body['error'] as String
+        : 'rejected';
+    final named = body != null && body['device_id'] is String
+        ? body['device_id'] as String
+        : null;
+    throw IngestException(response.statusCode, message, deviceId: named);
   }
 
-  Future<String?> _read(String deviceId, String eventId) async {
+  Future<String?> _read(String deviceId, String eventId, String bearer) async {
     if (faults.networkDown) {
       return null;
     }
     final response = await _client
         .get(
           _uri('/api/v1/devices/$deviceId/events/$eventId'),
-          headers: {'Authorization': 'Bearer $token'},
+          headers: {'Authorization': 'Bearer $bearer'},
         )
         .timeout(const Duration(seconds: 8));
-    if (response.statusCode == 404) {
-      return null;
-    }
-    if (response.statusCode != 200) {
+    if (response.statusCode == 404 || response.statusCode != 200) {
       return null;
     }
     final body = jsonDecode(response.body);

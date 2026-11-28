@@ -1,5 +1,8 @@
+import 'dart:async';
+
 import 'package:material_ui/material_ui.dart';
 
+import 'package:bylwapp/api/device_register.dart';
 import 'package:bylwapp/api/server_client.dart';
 import 'package:bylwapp/ble/device_manager.dart';
 import 'package:bylwapp/models/health_record.dart';
@@ -122,10 +125,46 @@ class _HomeDashboardState extends State<HomeDashboard> {
     if (quiet && !prefs.autoSync) return;
     setState(() => _syncing = true);
     final base = await widget.settings.getServerBaseUrl();
+    var deviceId = '';
+    final known = await deviceForToken(baseUrl: base, token: prefs.deviceToken);
+    if (known != null && known.isNotEmpty) {
+      deviceId = known;
+      if (prefs.collectorId != known) {
+        prefs.collectorId = known;
+        await widget.settings.setDeviceCredential(
+          token: prefs.deviceToken,
+          deviceId: known,
+        );
+      }
+    }
     final worker = SyncWorker(
       journal: study.journal,
       baseUrl: base,
       token: prefs.deviceToken,
+      deviceId: deviceId,
+      onDevice: (id) {
+        prefs.collectorId = id;
+        unawaited(
+          widget.settings.setDeviceCredential(
+            token: prefs.deviceToken,
+            deviceId: id,
+          ),
+        );
+      },
+      renewToken: (id) async {
+        try {
+          final result = await registerDevice(baseUrl: base, deviceId: id);
+          prefs.deviceToken = result.token;
+          prefs.collectorId = result.deviceId;
+          await widget.settings.setDeviceCredential(
+            token: result.token,
+            deviceId: result.deviceId,
+          );
+          return result.token;
+        } catch (_) {
+          return null;
+        }
+      },
       faults: SyncFaults(
         networkDown: prefs.faultNetworkDown,
         timeoutAfterCommit: prefs.faultTimeoutAfterCommit,

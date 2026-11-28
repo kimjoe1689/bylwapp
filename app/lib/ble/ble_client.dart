@@ -71,6 +71,10 @@ abstract class BleClient {
   Future<RingActionResult> performRingAction(RingAction action);
 
   Stream<RingNotice> get ringNotices;
+
+  RingSnapshot get ringSnapshot;
+
+  Stream<RingSnapshot> get ringSnapshots;
 }
 
 class FakeBleClient implements BleClient {
@@ -85,6 +89,8 @@ class FakeBleClient implements BleClient {
       StreamController<BleLink>.broadcast();
   final StreamController<RingNotice> _ringNotices =
       StreamController<RingNotice>.broadcast();
+  final StreamController<RingSnapshot> _ringSnapshots =
+      StreamController<RingSnapshot>.broadcast();
 
   @override
   Stream<List<BleScanHit>> get scanHits => _controller.stream;
@@ -122,4 +128,10 @@ class FakeBleClient implements BleClient {
 
   @override
   Stream<RingNotice> get ringNotices => _ringNotices.stream;
+
+  @override
+  RingSnapshot get ringSnapshot => const RingSnapshot();
+
+  @override
+  Stream<RingSnapshot> get ringSnapshots => _ringSnapshots.stream;
 }

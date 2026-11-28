@@ -58,6 +58,24 @@ class CanonicalEvent {
 
   String get payloadHash =>
       sha256.convert(utf8.encode(canonicalJson)).toString();
+
+  CanonicalEvent rebindDevice(String deviceId) {
+    return CanonicalEvent(
+      eventId: eventId,
+      deviceId: deviceId,
+      sessionId: sessionId,
+      sensorAddress: sensorAddress,
+      sensorKind: sensorKind,
+      sensorModel: sensorModel,
+      measurementType: measurementType,
+      unit: unit,
+      monotonicUs: monotonicUs,
+      clockState: clockState,
+      operatingState: operatingState,
+      values: values,
+      wallTimeUtc: wallTimeUtc,
+    );
+  }
 }
 
 String _encode(Object? value) {

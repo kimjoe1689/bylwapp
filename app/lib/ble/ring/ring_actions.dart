@@ -1,3 +1,31 @@
+class RingSnapshot {
+  const RingSnapshot({
+    this.batteryPercent,
+    this.charging = false,
+    this.historySyncedAt,
+    this.measuring = false,
+  });
+
+  final int? batteryPercent;
+  final bool charging;
+  final DateTime? historySyncedAt;
+  final bool measuring;
+
+  RingSnapshot copyWith({
+    int? batteryPercent,
+    bool? charging,
+    DateTime? historySyncedAt,
+    bool? measuring,
+  }) {
+    return RingSnapshot(
+      batteryPercent: batteryPercent ?? this.batteryPercent,
+      charging: charging ?? this.charging,
+      historySyncedAt: historySyncedAt ?? this.historySyncedAt,
+      measuring: measuring ?? this.measuring,
+    );
+  }
+}
+
 class RingNotice {
   const RingNotice({required this.at, required this.hex, required this.label});
 

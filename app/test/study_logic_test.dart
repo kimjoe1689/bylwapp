@@ -179,4 +179,105 @@ void main() {
     expect(await worker.syncOnce(), 1);
     expect((await store.recent()).single.syncState, 'synced');
   });
+
+  test('ingest 403 adopts the device that owns the token', () async {
+    sqfliteFfiInit();
+    databaseFactory = databaseFactoryFfi;
+    final path = p.join(
+      Directory.systemTemp.path,
+      'sync-403-${DateTime.now().microsecondsSinceEpoch}.db',
+    );
+    final store = await JournalStore.openPath(path);
+    addTearDown(() async => store.close());
+    final event = CanonicalEvent(
+      eventId: 'evt-ring',
+      deviceId: 'phone-wrong',
+      sessionId: 'sess-1',
+      sensorAddress: '32-33-47-31-06-07',
+      sensorKind: 'ring',
+      sensorModel: 'R12_0607',
+      measurementType: 'heart_rate',
+      unit: 'bpm',
+      monotonicUs: 82,
+      wallTimeUtc: '2026-11-28T07:23:00Z',
+      clockState: 'NTP_SYNCED',
+      operatingState: 'NOMINAL',
+      values: const {'bpm': 82},
+    );
+    await store.append(event);
+    final paths = <String>[];
+    final worker = SyncWorker(
+      journal: store,
+      baseUrl: 'http://example.test',
+      token: 'device-token',
+      client: MockClient((request) async {
+        paths.add(request.url.path);
+        if (request.url.path.contains('phone-wrong')) {
+          return http.Response(
+            '{"error":"device token does not match the path","device_id":"phone-real"}',
+            403,
+          );
+        }
+        return http.Response('{"result":"stored"}', 201);
+      }),
+    );
+    expect(await worker.syncOnce(), 1);
+    expect(paths, [
+      '/api/v1/devices/phone-wrong/events',
+      '/api/v1/devices/phone-real/events',
+    ]);
+    expect((await store.recent()).single.event.deviceId, 'phone-real');
+  });
+
+  test(
+    'ingest 403 without a named device renews a token for the event',
+    () async {
+      sqfliteFfiInit();
+      databaseFactory = databaseFactoryFfi;
+      final path = p.join(
+        Directory.systemTemp.path,
+        'sync-renew-${DateTime.now().microsecondsSinceEpoch}.db',
+      );
+      final store = await JournalStore.openPath(path);
+      addTearDown(() async => store.close());
+      final event = CanonicalEvent(
+        eventId: 'evt-ring-2',
+        deviceId: 'phone-kept',
+        sessionId: 'sess-1',
+        sensorAddress: '32-33-47-31-06-07',
+        sensorKind: 'ring',
+        sensorModel: 'R12_0607',
+        measurementType: 'heart_rate',
+        unit: 'bpm',
+        monotonicUs: 80,
+        wallTimeUtc: '2026-11-28T07:23:00Z',
+        clockState: 'NTP_SYNCED',
+        operatingState: 'NOMINAL',
+        values: const {'bpm': 80},
+      );
+      await store.append(event);
+      final headers = <String>[];
+      final worker = SyncWorker(
+        journal: store,
+        baseUrl: 'http://example.test',
+        token: 'stale',
+        renewToken: (id) async {
+          expect(id, 'phone-kept');
+          return 'fresh';
+        },
+        client: MockClient((request) async {
+          headers.add(request.headers['authorization'] ?? '');
+          if (request.headers['authorization'] == 'Bearer stale') {
+            return http.Response(
+              '{"error":"device token does not match the path"}',
+              403,
+            );
+          }
+          return http.Response('{"result":"stored"}', 201);
+        }),
+      );
+      expect(await worker.syncOnce(), 1);
+      expect(headers, ['Bearer stale', 'Bearer fresh']);
+    },
+  );
 }

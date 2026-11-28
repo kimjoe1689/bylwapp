@@ -58,9 +58,25 @@ class FlutterBlueSession implements BleClient {
   bool _measuringHr = false;
   final StreamController<RingNotice> _ringNotices =
       StreamController<RingNotice>.broadcast();
+  final StreamController<RingSnapshot> _ringSnapshots =
+      StreamController<RingSnapshot>.broadcast();
+  RingSnapshot _ringSnapshot = const RingSnapshot();
 
   @override
   Stream<RingNotice> get ringNotices => _ringNotices.stream;
+
+  @override
+  RingSnapshot get ringSnapshot => _ringSnapshot;
+
+  @override
+  Stream<RingSnapshot> get ringSnapshots => _ringSnapshots.stream;
+
+  void _publishRing(RingSnapshot next, {RingNotice? notice}) {
+    _ringSnapshot = next;
+    if (!_ringSnapshots.isClosed) _ringSnapshots.add(next);
+    if (notice != null && !_ringNotices.isClosed) _ringNotices.add(notice);
+  }
+
   void Function(HealthMeasurement measurement)? _onMeasurement;
   final BigDataAssembler _assembler = BigDataAssembler();
   final List<List<int>> _inbox = [];
@@ -325,11 +341,23 @@ class FlutterBlueSession implements BleClient {
           bylwLog(
             'stage battery percent=${battery.percent} charging=${battery.charging}',
           );
+          _publishRing(
+            _ringSnapshot.copyWith(
+              batteryPercent: battery.percent,
+              charging: battery.charging,
+            ),
+            notice: RingNotice(
+              at: DateTime.now(),
+              hex: '',
+              label: '电量 ${battery.percent}%',
+            ),
+          );
         }
       });
       await _ringStage('realtime-hr', () async {
         await _writeRing(RingPacket.startRealtimeHeartRate(), 'realtime-hr');
         _measuringHr = true;
+        _publishRing(_ringSnapshot.copyWith(measuring: true));
       });
       await _ringStage('history', () async {
         final saved = await _syncRing(
@@ -337,6 +365,10 @@ class FlutterBlueSession implements BleClient {
           temperatureLoggingEnabled: false,
         );
         bylwLog('stage history saved=$saved');
+        _publishRing(
+          _ringSnapshot.copyWith(historySyncedAt: DateTime.now()),
+          notice: RingNotice(at: DateTime.now(), hex: '', label: '历史已同步'),
+        );
       });
     } finally {
       _ringBusy = false;
@@ -396,6 +428,17 @@ class FlutterBlueSession implements BleClient {
           final packet = await _awaitCommand(RingPacket.cmdBattery);
           final battery = packet == null ? null : parseBattery(packet);
           if (battery == null) return RingActionResult.unsupported;
+          _publishRing(
+            _ringSnapshot.copyWith(
+              batteryPercent: battery.percent,
+              charging: battery.charging,
+            ),
+            notice: RingNotice(
+              at: DateTime.now(),
+              hex: '',
+              label: '电量 ${battery.percent}%',
+            ),
+          );
           return RingActionResult(
             supported: true,
             message: '电量 ${battery.percent}%',
@@ -411,10 +454,12 @@ class FlutterBlueSession implements BleClient {
         case 'live-start':
           await _writeRing(RingPacket.startRealtimeHeartRate(), 'realtime-hr');
           _measuringHr = true;
+          _publishRing(_ringSnapshot.copyWith(measuring: true));
           return RingActionResult.ok;
         case 'live-stop':
           await _writeRing(RingPacket.stopRealtimeHeartRate(), 'stop-hr');
           _measuringHr = false;
+          _publishRing(_ringSnapshot.copyWith(measuring: false));
           return RingActionResult.ok;
         case 'auto-read':
           return await _auto(action, write: false);
@@ -610,13 +655,16 @@ class FlutterBlueSession implements BleClient {
       packet,
       now: DateTime.now().toUtc(),
     );
-    if (driver is YawellRingDriver &&
-        measurements.isEmpty &&
-        !_ringNotices.isClosed) {
-      final hex = packet
-          .map((byte) => byte.toRadixString(16).padLeft(2, '0'))
-          .join(' ');
-      _ringNotices.add(RingNotice(at: DateTime.now(), hex: hex, label: '戒指通知'));
+    if (driver is YawellRingDriver && !_ringNotices.isClosed) {
+      final label = ringNoticeLabel(packet);
+      if (label != null) {
+        final hex = packet
+            .map((byte) => byte.toRadixString(16).padLeft(2, '0'))
+            .join(' ');
+        _ringNotices.add(
+          RingNotice(at: DateTime.now(), hex: hex, label: label),
+        );
+      }
     }
     for (final measurement in measurements) {
       await _deliver(measurement);
