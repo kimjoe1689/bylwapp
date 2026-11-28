@@ -25,11 +25,56 @@ class LiveActivitySnapshot {
     required this.steps,
     required this.calories,
     required this.distanceMeters,
+    required this.rawCalories,
   });
 
   final int steps;
   final int calories;
   final int distanceMeters;
+
+  /// The uint24 as sent. The calorie scale is not settled.
+  final int rawCalories;
+}
+
+class RingDeviceInfo {
+  const RingDeviceInfo({
+    this.temperature,
+    this.spo2,
+    this.stress,
+    this.hrv,
+    this.screenWidth,
+    this.screenHeight,
+    this.maxPacket,
+    this.model,
+    this.firmware,
+    this.hardware,
+  });
+
+  final bool? temperature;
+  final bool? spo2;
+  final bool? stress;
+  final bool? hrv;
+  final int? screenWidth;
+  final int? screenHeight;
+  final int? maxPacket;
+  final String? model;
+  final String? firmware;
+  final String? hardware;
+
+  RingDeviceInfo merge(RingDeviceInfo newer) {
+    return RingDeviceInfo(
+      temperature: newer.temperature ?? temperature,
+      spo2: newer.spo2 ?? spo2,
+      stress: newer.stress ?? stress,
+      hrv: newer.hrv ?? hrv,
+      screenWidth: newer.screenWidth ?? screenWidth,
+      screenHeight: newer.screenHeight ?? screenHeight,
+      maxPacket: newer.maxPacket ?? maxPacket,
+      model: newer.model ?? model,
+      firmware: newer.firmware ?? firmware,
+      hardware: newer.hardware ?? hardware,
+    );
+  }
 }
 
 class BatteryStatus {
@@ -154,8 +199,18 @@ String? ringNoticeLabel(List<int> packet) {
     }
     return null;
   }
+  if (command == 0x2f) return null;
+  if (command == RingPacket.cmdNotification) {
+    return describeRingNotification(packet);
+  }
+  if (command == 0x02) {
+    final subtype = packet.length > 1 ? packet[1] & 0xff : 0;
+    final hex = subtype.toRadixString(16).padLeft(2, '0');
+    if (subtype == 0) return '手势已确认';
+    if (subtype == 2) return '检测到挥手';
+    return '手势回应 0x02/$hex';
+  }
   if (_routineHistoryCommand(command)) return null;
-  if (parseLiveActivity(packet) != null) return null;
   final battery = parseBattery(packet);
   if (battery != null) return '电量 ${battery.percent}%';
   if (command == RingPacket.cmdBattery && packet.length >= 2) {
@@ -203,11 +258,92 @@ LiveActivitySnapshot? parseLiveActivity(List<int> packet) {
   if ((packet[1] & 0xff) != RingPacket.notificationLiveActivity) {
     return null;
   }
+  final rawCalories = _u24(packet[5], packet[6], packet[7]);
   return LiveActivitySnapshot(
     steps: _u24(packet[2], packet[3], packet[4]),
-    calories: _u24(packet[5], packet[6], packet[7]) ~/ 10,
+    calories: rawCalories ~/ 10,
     distanceMeters: _u24(packet[8], packet[9], packet[10]),
+    rawCalories: rawCalories,
   );
+}
+
+/// Set-time replies carry capability bits, not the clock.
+RingDeviceInfo? parseSetTimeReply(List<int> packet) {
+  if (packet.length < 15 || (packet[0] & 0xff) != RingPacket.cmdSetDateTime) {
+    return null;
+  }
+  final flags1 = packet[4] & 0xff;
+  final flags4 = packet[14] & 0xff;
+  final widthBe = _u16be(packet, 5);
+  final heightBe = _u16be(packet, 7);
+  final widthLe = _u16le(packet, 5);
+  final heightLe = _u16le(packet, 7);
+  final width = widthBe != 0 ? widthBe : widthLe;
+  final height = heightBe != 0 ? heightBe : heightLe;
+  return RingDeviceInfo(
+    temperature: (packet[1] & 0xff) == 1,
+    spo2: (flags1 & 0x02) != 0,
+    stress: (flags4 & 0x10) != 0,
+    hrv: (flags4 & 0x20) != 0,
+    screenWidth: width == 0 ? null : width,
+    screenHeight: height == 0 ? null : height,
+  );
+}
+
+/// 0x2f reports the largest packet the ring accepts.
+int? parsePackageLength(List<int> packet) {
+  if (packet.length < 2 || (packet[0] & 0xff) != 0x2f) return null;
+  final length = packet[1] & 0xff;
+  return length == 0 ? null : length;
+}
+
+/// Chinese label for a 0x73 notification, including unknown subtypes.
+String describeRingNotification(List<int> packet) {
+  final subtype = packet.length > 1 ? packet[1] & 0xff : 0;
+  final hex = subtype.toRadixString(16).padLeft(2, '0');
+  switch (subtype) {
+    case 0x01:
+      return '有新的心率数据';
+    case 0x03:
+      return '有新的血氧数据';
+    case 0x04:
+      return '有新的步数明细';
+    case 0x05:
+      return '有新的体温数据';
+    case 0x0c:
+      final percent = packet.length > 2 ? packet[2] & 0xff : 0;
+      final charging = packet.length > 3 && (packet[3] & 0xff) == 1;
+      return charging ? '电量 $percent% 充电中' : '电量 $percent%';
+    case 0x12:
+      final live = parseLiveActivity(packet);
+      if (live == null) return '实时步数';
+      return '步数 ${live.steps}，距离 ${live.distanceMeters} 米，热量原始值 ${live.rawCalories}（单位未确定）';
+    case 0x27:
+      final raw = _guessTemperatureRaw(packet);
+      if (raw == null) return '推测体温';
+      final celsius = raw / 10 + 20;
+      return '推测体温 ${celsius.toStringAsFixed(1)} °C';
+    default:
+      return '未知通知 0x73/0x$hex';
+  }
+}
+
+int? _guessTemperatureRaw(List<int> packet) {
+  for (final index in [2, 3]) {
+    if (packet.length <= index) continue;
+    final raw = packet[index] & 0xff;
+    final celsius = raw / 10 + 20;
+    if (celsius >= 30 && celsius <= 42) return raw;
+  }
+  return null;
+}
+
+int _u16be(List<int> packet, int offset) {
+  return ((packet[offset] & 0xff) << 8) | (packet[offset + 1] & 0xff);
+}
+
+int _u16le(List<int> packet, int offset) {
+  return (packet[offset] & 0xff) | ((packet[offset + 1] & 0xff) << 8);
 }
 
 RingParseResult _parseActivity(List<int> packet) {

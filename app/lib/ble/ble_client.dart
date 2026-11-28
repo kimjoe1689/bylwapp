@@ -76,6 +76,8 @@ abstract class BleClient {
 
   Stream<RingSnapshot> get ringSnapshots;
 
+  Stream<String> get gestureRx;
+
   /// How many days before today the next history sync should request.
   void setRingHistoryDepth(int days);
 }
@@ -94,6 +96,8 @@ class FakeBleClient implements BleClient {
       StreamController<RingNotice>.broadcast();
   final StreamController<RingSnapshot> _ringSnapshots =
       StreamController<RingSnapshot>.broadcast();
+  final StreamController<String> _gestureRx =
+      StreamController<String>.broadcast();
 
   @override
   Stream<List<BleScanHit>> get scanHits => _controller.stream;
@@ -137,6 +141,9 @@ class FakeBleClient implements BleClient {
 
   @override
   Stream<RingSnapshot> get ringSnapshots => _ringSnapshots.stream;
+
+  @override
+  Stream<String> get gestureRx => _gestureRx.stream;
 
   @override
   void setRingHistoryDepth(int days) {}

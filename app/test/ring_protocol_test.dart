@@ -39,8 +39,9 @@ void main() {
     expect(start.sublist(0, 3), [0x69, 0x01, 0x01]);
     expect(RingPacket.checksumValid(start), isTrue);
     final keep = RingPacket.continueRealtimeHeartRate();
-    expect(keep[0], 0x1e);
-    expect(keep[15], 0x1e);
+    expect(keep.sublist(0, 2), [0x1e, 0x03]);
+    expect(keep[15], 0x21);
+    expect(RingPacket.checksumValid(keep), isTrue);
     expect(RingPacket.stopRealtimeHeartRate()[0], 0x6a);
     expect(RingPacket.batteryRequest()[0], 0x03);
   });
@@ -125,10 +126,7 @@ void main() {
     expect(parsed.measurements.map((item) => item.values['bpm']).toList(), [
       70,
     ]);
-    expect(
-      parsed.measurements.single.recordedAt,
-      ringWallClock(2026, 11, 27),
-    );
+    expect(parsed.measurements.single.recordedAt, ringWallClock(2026, 11, 27));
   });
 
   test('decodes live steps, realtime heart rate, and battery', () {
@@ -420,6 +418,50 @@ void main() {
     );
     expect(parsed.measurements.single.values['bpm'], 82);
     expect(parsed.measurements.single.values['source'], 'manual');
+  });
+
+  test('device notifications, capabilities, and gesture commands', () {
+    expect(describeRingNotification(const [0x73, 0x01]), '有新的心率数据');
+    expect(describeRingNotification(const [0x73, 0x03]), '有新的血氧数据');
+    expect(describeRingNotification(const [0x73, 0x0c, 80, 1]), '电量 80% 充电中');
+    expect(describeRingNotification(const [0x73, 0x27, 0xa5]), '推测体温 36.5 °C');
+    expect(describeRingNotification(const [0x73, 0x99]), '未知通知 0x73/0x99');
+    expect(ringNoticeLabel(const [0x2f, 0xf4]), isNull);
+    expect(parsePackageLength(const [0x2f, 0xf4]), 0xf4);
+    expect(ringNoticeLabel(RingPacket.build(const [0x39])), isNull);
+    expect(ringNoticeLabel(RingPacket.build(const [0x3a])), isNull);
+    final zero = RingPacket.build(const [0x69, 0x0b, 0x00, 0x00]);
+    expect(parseRingPacket(zero, today: today, now: now).measurements, isEmpty);
+    expect(ringNoticeLabel(zero), isNull);
+    final caps = parseSetTimeReply([
+      0x01,
+      0x01,
+      0x00,
+      0x00,
+      0x02,
+      0x00,
+      0xf0,
+      0x01,
+      0x90,
+      0x00,
+      0x00,
+      0x00,
+      0x00,
+      0x00,
+      0x30,
+      0x00,
+    ]);
+    expect(caps!.temperature, isTrue);
+    expect(caps.spo2, isTrue);
+    expect(caps.stress, isTrue);
+    expect(caps.hrv, isTrue);
+    expect(caps.screenWidth, 0xf0);
+    expect(caps.screenHeight, 0x190);
+    expect(RingPacket.gesture(0x04).sublist(0, 2), [0x02, 0x04]);
+    expect(RingPacket.gesture(0x05).sublist(0, 2), [0x02, 0x05]);
+    expect(RingPacket.gesture(0x06).sublist(0, 2), [0x02, 0x06]);
+    expect(ringNoticeLabel(const [0x02, 0x00]), '手势已确认');
+    expect(ringNoticeLabel(const [0x02, 0x02]), '检测到挥手');
   });
 
   test('R09 and R05 are the temperature models', () {

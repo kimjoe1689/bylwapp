@@ -6,6 +6,7 @@ import 'package:material_ui/material_ui.dart';
 import 'package:bylwapp/ble/ble_client.dart';
 import 'package:bylwapp/ble/device_manager.dart';
 import 'package:bylwapp/ble/ring/ring_actions.dart';
+import 'package:bylwapp/ble/ring/ring_parser.dart';
 import 'package:bylwapp/journal/journal_store.dart';
 import 'package:bylwapp/ui/app_theme.dart';
 import 'package:bylwapp/ui/mini_chart.dart';
@@ -155,6 +156,7 @@ class _RingControlPageState extends State<RingControlPage> {
         if (snap.historySyncedAt != null) _historyAt = snap.historySyncedAt;
         if (snap.temperatureC != null) _temperatureC = snap.temperatureC;
         _temperatureChecked = snap.temperatureChecked;
+        if (snap.info != null) _info = snap.info;
       });
       _loadJournal();
     });
@@ -165,6 +167,8 @@ class _RingControlPageState extends State<RingControlPage> {
   void dispose() {
     _noticeSub?.cancel();
     _snapshotSub?.cancel();
+    _gestureTick?.cancel();
+    _gestureSub?.cancel();
     _scroll.dispose();
     widget.devices?.removeListener(_rebuild);
     super.dispose();
@@ -242,15 +246,23 @@ class _RingControlPageState extends State<RingControlPage> {
   double? _journalTemp;
   double? _temperatureC;
   bool _temperatureChecked = false;
+  RingDeviceInfo? _info;
+  int? _gestureLeft;
+  final List<String> _gestureLog = [];
+  Timer? _gestureTick;
+  StreamSubscription<String>? _gestureSub;
 
   void _pushNotice(RingNotice notice) {
-    if (_notices.isNotEmpty && _notices.first.label == notice.label) {
+    if (_notices.isNotEmpty &&
+        _notices.first.label == notice.label &&
+        _notices.first.developerOnly == notice.developerOnly) {
       final previous = _notices.first;
       _notices[0] = RingNotice(
         at: notice.at,
         hex: notice.hex.isEmpty ? previous.hex : notice.hex,
         label: notice.label,
         count: previous.count + 1,
+        developerOnly: notice.developerOnly,
       );
       return;
     }
@@ -341,6 +353,10 @@ class _RingControlPageState extends State<RingControlPage> {
               ),
             ],
           ),
+          if (preview == null && _info != null) ...[
+            const SizedBox(height: 8),
+            _DeviceInfoCard(info: _info!),
+          ],
           if (preview == null) ...[
             const SizedBox(height: 8),
             _TemperatureCard(
@@ -420,8 +436,19 @@ class _RingControlPageState extends State<RingControlPage> {
                 label: '读取电量',
                 onTap: () => _act(RingAction.battery),
               ),
+              _Tool(
+                icon: Icons.waving_hand_outlined,
+                label: '测试手势',
+                onTap: _testGesture,
+              ),
             ],
           ),
+          if (_gestureLog.isNotEmpty) ...[
+            const SizedBox(height: 8),
+            Text(_gestureLeft == null ? '手势测试结束' : '请挥手 $_gestureLeft 秒'),
+            for (final line in _gestureLog.take(8))
+              Text(line, style: const TextStyle(fontSize: 12)),
+          ],
           const SizedBox(height: 16),
           Row(
             children: [
@@ -433,13 +460,13 @@ class _RingControlPageState extends State<RingControlPage> {
               ),
             ],
           ),
-          if (_notices.isEmpty)
+          if (_visibleNotices.isEmpty)
             Text(
               '还没有戒指主动发来的通知。',
               style: TextStyle(color: scheme.onSurfaceVariant),
             )
           else
-            for (final notice in _notices.take(8))
+            for (final notice in _visibleNotices.take(8))
               Padding(
                 padding: const EdgeInsets.only(bottom: 8),
                 child: Column(
@@ -482,11 +509,11 @@ class _RingControlPageState extends State<RingControlPage> {
                     children: [
                       OutlinedButton(
                         onPressed: () => _confirm(
-                          '关机',
-                          '戒指会关闭，直到放回充电座。',
+                          '重启/关机（0x08）',
+                          '不同固件上，这条指令可能是重启，也可能是关机。',
                           RingAction.powerOff,
                         ),
-                        child: const Text('关机'),
+                        child: const Text('重启/关机（0x08）'),
                       ),
                       OutlinedButton(
                         onPressed: () => _confirm(
@@ -505,6 +532,57 @@ class _RingControlPageState extends State<RingControlPage> {
         ],
       ),
     );
+  }
+
+  List<RingNotice> get _visibleNotices => _showHex
+      ? _notices
+      : _notices.where((notice) => !notice.developerOnly).toList();
+
+  Future<void> _testGesture() async {
+    final ble = widget.ble;
+    if (ble == null || _gestureLeft != null || widget.preview != null) return;
+    setState(() {
+      _gestureLeft = 30;
+      _gestureLog
+        ..clear()
+        ..add('已发送 02 04、02 05。请在 30 秒内挥手。');
+    });
+    await _gestureSub?.cancel();
+    _gestureSub = ble.gestureRx.listen((line) {
+      if (!mounted) return;
+      setState(() {
+        _gestureLog.insert(0, line);
+        if (_gestureLog.length > 12) _gestureLog.removeLast();
+      });
+    });
+    await ble.performRingAction(RingAction.gestureOn);
+    await ble.performRingAction(RingAction.gestureWait);
+    _gestureTick?.cancel();
+    _gestureTick = Timer.periodic(const Duration(seconds: 1), (timer) {
+      if (!mounted) {
+        timer.cancel();
+        return;
+      }
+      final left = (_gestureLeft ?? 1) - 1;
+      if (left <= 0) {
+        _finishGesture();
+      } else {
+        setState(() => _gestureLeft = left);
+      }
+    });
+  }
+
+  Future<void> _finishGesture() async {
+    _gestureTick?.cancel();
+    _gestureTick = null;
+    await widget.ble?.performRingAction(RingAction.gestureOff);
+    await _gestureSub?.cancel();
+    _gestureSub = null;
+    if (!mounted) return;
+    setState(() {
+      _gestureLeft = null;
+      _gestureLog.insert(0, '已发送关闭手势 02 06。');
+    });
   }
 
   int? _live(String type, String key) {
@@ -868,6 +946,47 @@ class _LiveCard extends StatelessWidget {
               unit,
               style: TextStyle(fontSize: 11, color: scheme.onSurfaceVariant),
             ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _DeviceInfoCard extends StatelessWidget {
+  const _DeviceInfoCard({required this.info});
+
+  final RingDeviceInfo info;
+
+  @override
+  Widget build(BuildContext context) {
+    String yesNo(bool? value) => switch (value) {
+      true => '支持',
+      false => '不支持',
+      null => '未知',
+    };
+    final lines = <String>[
+      if (info.model != null) '型号 ${info.model}',
+      if (info.firmware != null) '固件 ${info.firmware}',
+      if (info.hardware != null) '硬件 ${info.hardware}',
+      '体温 ${yesNo(info.temperature)}',
+      '血氧 ${yesNo(info.spo2)}',
+      '压力 ${yesNo(info.stress)}',
+      'HRV ${yesNo(info.hrv)}',
+      if (info.screenWidth != null && info.screenHeight != null)
+        '屏幕 ${info.screenWidth}×${info.screenHeight}',
+      if (info.maxPacket != null) '最大包长 ${info.maxPacket} 字节',
+    ];
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text('设备信息'),
+            const SizedBox(height: 8),
+            for (final line in lines)
+              Text(line, style: const TextStyle(fontSize: 13)),
           ],
         ),
       ),

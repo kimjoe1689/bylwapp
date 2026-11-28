@@ -41,17 +41,21 @@ class RingSyncCursor {
     required this.temperatureCapable,
     this.temperatureLoggingEnabled = false,
     this.maxDaysAgo = 1,
+    this.onlyPhase,
   }) : now = now,
        today = DateTime(
          now.toLocal().year,
          now.toLocal().month,
          now.toLocal().day,
-       );
+       ) {
+    if (onlyPhase != null) phase = onlyPhase!;
+  }
 
   final DateTime now;
   final DateTime today;
   final bool temperatureCapable;
   final int maxDaysAgo;
+  final RingSyncPhase? onlyPhase;
   bool temperatureLoggingEnabled;
 
   /// Older days often have no reply. Don't wait the full history timeout.
@@ -230,6 +234,10 @@ class RingSyncCursor {
   void _endPhase() {
     daysAgo = 0;
     hrPacketTotal = null;
+    if (onlyPhase != null) {
+      phase = RingSyncPhase.done;
+      return;
+    }
     switch (phase) {
       case RingSyncPhase.activity:
         phase = RingSyncPhase.heartRate;

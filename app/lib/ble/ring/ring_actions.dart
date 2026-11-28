@@ -1,3 +1,5 @@
+import 'package:bylwapp/ble/ring/ring_parser.dart';
+
 class RingSnapshot {
   const RingSnapshot({
     this.batteryPercent,
@@ -6,6 +8,7 @@ class RingSnapshot {
     this.measuring = false,
     this.temperatureC,
     this.temperatureChecked = false,
+    this.info,
   });
 
   final int? batteryPercent;
@@ -14,6 +17,7 @@ class RingSnapshot {
   final bool measuring;
   final double? temperatureC;
   final bool temperatureChecked;
+  final RingDeviceInfo? info;
 
   RingSnapshot copyWith({
     int? batteryPercent,
@@ -22,6 +26,7 @@ class RingSnapshot {
     bool? measuring,
     double? temperatureC,
     bool? temperatureChecked,
+    RingDeviceInfo? info,
   }) {
     return RingSnapshot(
       batteryPercent: batteryPercent ?? this.batteryPercent,
@@ -30,6 +35,7 @@ class RingSnapshot {
       measuring: measuring ?? this.measuring,
       temperatureC: temperatureC ?? this.temperatureC,
       temperatureChecked: temperatureChecked ?? this.temperatureChecked,
+      info: info == null ? this.info : (this.info?.merge(info) ?? info),
     );
   }
 }
@@ -40,9 +46,11 @@ class RingNotice {
     required this.hex,
     required this.label,
     this.count = 1,
+    this.developerOnly = false,
   });
 
   final int count;
+  final bool developerOnly;
 
   final DateTime at;
   final String hex;
@@ -65,6 +73,9 @@ class RingAction {
   static const factoryReset = RingAction('factory');
   static const startHeart = RingAction('live-start', metric: 'heart_rate');
   static const stopHeart = RingAction('live-stop', metric: 'heart_rate');
+  static const gestureOn = RingAction('gesture-on');
+  static const gestureWait = RingAction('gesture-wait');
+  static const gestureOff = RingAction('gesture-off');
 
   static RingAction readAuto(String metric) =>
       RingAction('auto-read', metric: metric);

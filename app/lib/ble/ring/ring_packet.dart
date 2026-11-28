@@ -135,9 +135,13 @@ class RingPacket {
     0xff,
   ];
 
-  /// Keep-alive. Gadgetbridge repeats 0x1e while the session is open.
+  /// Keep-alive. The public command layout uses type 3, so the packet is 1e 03.
+  /// A bare 1e 00 lets the realtime stream stop after about 30 seconds.
   static List<int> continueRealtimeHeartRate() =>
-      build(const [cmdRealtimeHeartRate]);
+      build(const [cmdRealtimeHeartRate, 0x03]);
+
+  /// Wave-gesture camera mode: 4 arms it, 5 waits, 6 turns it off.
+  static List<int> gesture(int action) => build([0x02, action & 0xff]);
 
   static List<int> stopRealtimeHeartRate() => build(const [cmdStopHeartRate]);
 

@@ -61,6 +61,10 @@ class FlutterBlueSession implements BleClient {
       StreamController<RingNotice>.broadcast();
   final StreamController<RingSnapshot> _ringSnapshots =
       StreamController<RingSnapshot>.broadcast();
+  final StreamController<String> _gestureRx =
+      StreamController<String>.broadcast();
+  final Map<RingSyncPhase, Timer> _incremental = {};
+  bool _gestureWatch = false;
   RingSnapshot _ringSnapshot = const RingSnapshot();
 
   @override
@@ -71,6 +75,9 @@ class FlutterBlueSession implements BleClient {
 
   @override
   Stream<RingSnapshot> get ringSnapshots => _ringSnapshots.stream;
+
+  @override
+  Stream<String> get gestureRx => _gestureRx.stream;
 
   @override
   void setRingHistoryDepth(int days) {
@@ -231,6 +238,11 @@ class FlutterBlueSession implements BleClient {
     final name = _connectedName;
     final driverId = _driver?.id;
     _wantConnected = false;
+    _gestureWatch = false;
+    for (final timer in _incremental.values) {
+      timer.cancel();
+    }
+    _incremental.clear();
     _ringResync?.cancel();
     _ringKeepalive?.cancel();
     _ringResync = null;
@@ -336,9 +348,11 @@ class FlutterBlueSession implements BleClient {
     _ringResync?.cancel();
     _ringKeepalive?.cancel();
     try {
+      await _readDeviceInfo();
       await _ringStage('set-time', () async {
         await _writeRing(RingPacket.encodeDateTime(DateTime.now()), 'set-time');
-        await _awaitCommand(RingPacket.cmdSetDateTime);
+        final reply = await _awaitCommand(RingPacket.cmdSetDateTime);
+        if (reply != null) _noteControlPacket(reply);
       });
       await _ringStage('battery', () async {
         await _writeRing(RingPacket.batteryRequest(), 'battery');
@@ -440,11 +454,27 @@ class FlutterBlueSession implements BleClient {
         _writeRing(RingPacket.continueRealtimeHeartRate(), 'hr-continue'),
       );
     });
-    _ringResync = Timer.periodic(const Duration(minutes: 5), (_) {
-      if (_wantConnected && !_ringBusy) {
-        unawaited(_ringBringUp());
+    _ringResync = Timer.periodic(const Duration(minutes: 15), (_) {
+      if (_wantConnected && !_ringBusy && !_syncing) {
+        unawaited(_ringHistoryOnly());
       }
     });
+  }
+
+  Future<void> _ringHistoryOnly() async {
+    if (_ringBusy || _driver is! YawellRingDriver || !_wantConnected) return;
+    _ringBusy = true;
+    try {
+      final saved = await _syncRing(
+        true,
+        temperatureLoggingEnabled: true,
+        maxDaysAgo: _ringHistoryDays,
+      );
+      bylwLog('stage resync saved=$saved');
+      _publishRing(_ringSnapshot.copyWith(historySyncedAt: DateTime.now()));
+    } finally {
+      _ringBusy = false;
+    }
   }
 
   Future<void> _ringStage(String name, Future<void> Function() body) async {
@@ -507,6 +537,20 @@ class FlutterBlueSession implements BleClient {
         case 'factory':
           await _writeRing(RingPacket.factoryReset(), 'factory-reset');
           return RingActionResult.ok;
+        case 'gesture-on':
+          await _writeRing(RingPacket.gesture(0x04), 'gesture-on');
+          return RingActionResult.ok;
+        case 'gesture-wait':
+          _gestureWatch = true;
+          await _writeRing(RingPacket.gesture(0x05), 'gesture-wait');
+          return RingActionResult.ok;
+        case 'gesture-off':
+          await _writeRing(RingPacket.gesture(0x06), 'gesture-off');
+          _gestureWatch = false;
+          return const RingActionResult(
+            supported: true,
+            message: '已关闭手势（02 06）',
+          );
         case 'live-start':
           await _writeRing(RingPacket.startRealtimeHeartRate(), 'realtime-hr');
           _measuringHr = true;
@@ -605,7 +649,10 @@ class FlutterBlueSession implements BleClient {
           return null;
         }
         final packet = await _nextPacket(remaining);
-        if (packet.isEmpty || (packet[0] & 0xff) != command) continue;
+        if (packet.isEmpty || (packet[0] & 0xff) != command) {
+          _noteControlPacket(packet);
+          continue;
+        }
         if (subtype != null &&
             (packet.length < 2 || (packet[1] & 0xff) != subtype)) {
           continue;
@@ -672,6 +719,10 @@ class FlutterBlueSession implements BleClient {
         .join(' ');
     bylwLog('rx $characteristicUuid $hex');
     _trace('rx', characteristicUuid, value);
+    if (_gestureWatch && !_gestureRx.isClosed) {
+      final label = ringNoticeLabel(value);
+      _gestureRx.add(label == null ? hex : '$label  $hex');
+    }
     unawaited(
       _onValue(characteristicUuid, value).catchError((Object error) {
         bylwLog('parse failed $error raw=$hex');
@@ -714,19 +765,135 @@ class FlutterBlueSession implements BleClient {
       packet,
       now: DateTime.now().toUtc(),
     );
-    if (driver is YawellRingDriver && !_ringNotices.isClosed) {
-      final label = ringNoticeLabel(packet);
-      if (label != null) {
-        final hex = packet
-            .map((byte) => byte.toRadixString(16).padLeft(2, '0'))
-            .join(' ');
-        _ringNotices.add(
-          RingNotice(at: DateTime.now(), hex: hex, label: label),
-        );
-      }
+    if (driver is YawellRingDriver) {
+      _noteControlPacket(packet);
     }
     for (final measurement in measurements) {
       await _deliver(measurement);
+    }
+  }
+
+  void _rememberInfo(RingDeviceInfo info) {
+    _publishRing(_ringSnapshot.copyWith(info: info));
+  }
+
+  void _addNotice(String label, String hex, {bool developerOnly = false}) {
+    if (_ringNotices.isClosed || label.isEmpty) return;
+    _ringNotices.add(
+      RingNotice(
+        at: DateTime.now(),
+        hex: hex,
+        label: label,
+        developerOnly: developerOnly,
+      ),
+    );
+  }
+
+  String _hex(List<int> packet) =>
+      packet.map((byte) => byte.toRadixString(16).padLeft(2, '0')).join(' ');
+
+  void _noteControlPacket(List<int> packet) {
+    if (packet.isEmpty) return;
+    final command = packet[0] & 0xff;
+    final hex = _hex(packet);
+    final length = parsePackageLength(packet);
+    if (length != null) {
+      _rememberInfo(RingDeviceInfo(maxPacket: length));
+      _addNotice('最大包长 $length 字节', hex, developerOnly: true);
+      return;
+    }
+    if (command == RingPacket.cmdSetDateTime &&
+        packet.length >= 15 &&
+        (packet[1] & 0xff) <= 1) {
+      final caps = parseSetTimeReply(packet);
+      if (caps != null) _rememberInfo(caps);
+      return;
+    }
+    if (command == RingPacket.cmdNotification && packet.length > 1) {
+      final subtype = packet[1] & 0xff;
+      if (subtype == 0x0c && packet.length > 2) {
+        _publishRing(
+          _ringSnapshot.copyWith(
+            batteryPercent: packet[2] & 0xff,
+            charging: packet.length > 3 && (packet[3] & 0xff) == 1,
+          ),
+        );
+      }
+      final phase = switch (subtype) {
+        0x01 => RingSyncPhase.heartRate,
+        0x03 => RingSyncPhase.spo2,
+        0x04 => RingSyncPhase.activity,
+        0x05 || 0x27 => RingSyncPhase.temperature,
+        _ => null,
+      };
+      if (phase != null) _scheduleIncremental(phase);
+    }
+    final label = ringNoticeLabel(packet);
+    if (label == null) return;
+    final notable =
+        command == RingPacket.cmdNotification ||
+        command == 0x02 ||
+        command == RingPacket.cmdBattery ||
+        command == RingPacket.cmdFind;
+    _addNotice(label, hex, developerOnly: !notable);
+  }
+
+  void _scheduleIncremental(RingSyncPhase phase) {
+    _incremental[phase]?.cancel();
+    _incremental[phase] = Timer(const Duration(seconds: 2), () {
+      unawaited(_runIncremental(phase));
+    });
+  }
+
+  Future<void> _runIncremental(RingSyncPhase phase) async {
+    if (!_wantConnected || _driver is! YawellRingDriver) return;
+    if (_ringBusy || _syncing) {
+      _scheduleIncremental(phase);
+      return;
+    }
+    _ringBusy = true;
+    try {
+      bylwLog('stage incremental $phase');
+      final saved = await _syncRing(
+        true,
+        temperatureLoggingEnabled: phase != RingSyncPhase.temperature,
+        maxDaysAgo: 0,
+        onlyPhase: phase,
+      );
+      bylwLog('stage incremental $phase saved=$saved');
+    } finally {
+      _ringBusy = false;
+    }
+  }
+
+  Future<void> _readDeviceInfo() async {
+    final model = await _readDeviceString(modelNumberUuid);
+    final firmware = await _readDeviceString(firmwareRevisionUuid);
+    final hardware = await _readDeviceString(hardwareRevisionUuid);
+    if (model == null && firmware == null && hardware == null) {
+      bylwLog('dis missing');
+      return;
+    }
+    _rememberInfo(
+      RingDeviceInfo(model: model, firmware: firmware, hardware: hardware),
+    );
+  }
+
+  Future<String?> _readDeviceString(String characteristicUuid) async {
+    final characteristic = _find(deviceInfoServiceUuid, characteristicUuid);
+    if (characteristic == null) return null;
+    try {
+      final value = await characteristic.read();
+      final end = value.indexOf(0);
+      final slice = end < 0 ? value : value.sublist(0, end);
+      final text = String.fromCharCodes(
+        slice.where((byte) => byte >= 32 && byte < 127),
+      ).trim();
+      bylwLog('dis $characteristicUuid $text');
+      return text.isEmpty ? null : text;
+    } catch (error) {
+      bylwLog('dis $characteristicUuid failed $error');
+      return null;
     }
   }
 
@@ -754,12 +921,14 @@ class FlutterBlueSession implements BleClient {
     bool temperatureCapable, {
     required bool temperatureLoggingEnabled,
     int maxDaysAgo = 1,
+    RingSyncPhase? onlyPhase,
   }) async {
     final cursor = RingSyncCursor(
       now: DateTime.now(),
       temperatureCapable: temperatureCapable,
       temperatureLoggingEnabled: temperatureLoggingEnabled,
       maxDaysAgo: maxDaysAgo,
+      onlyPhase: onlyPhase,
     );
     _syncing = true;
     _inbox.clear();
