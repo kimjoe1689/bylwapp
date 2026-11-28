@@ -132,7 +132,9 @@ class _RingControlPageState extends State<RingControlPage> {
       _hrAuto = true;
       _spo2Auto = false;
       _stressUnsupported = true;
-      _notices.addAll(preview.notices);
+      for (final notice in preview.notices) {
+        _pushNotice(notice);
+      }
     } else if (snap != null) {
       _battery = snap.batteryPercent;
       _charging = snap.charging;
@@ -141,11 +143,8 @@ class _RingControlPageState extends State<RingControlPage> {
     }
     widget.devices?.addListener(_rebuild);
     _noticeSub = widget.ble?.ringNotices.listen((notice) {
-      if (!mounted) return;
-      setState(() {
-        _notices.insert(0, notice);
-        if (_notices.length > 12) _notices.removeLast();
-      });
+      if (!mounted || notice.label.isEmpty) return;
+      setState(() => _pushNotice(notice));
     });
     _snapshotSub = widget.ble?.ringSnapshots.listen((snap) {
       if (!mounted) return;
@@ -154,6 +153,8 @@ class _RingControlPageState extends State<RingControlPage> {
         _charging = snap.charging;
         _measuring = snap.measuring;
         if (snap.historySyncedAt != null) _historyAt = snap.historySyncedAt;
+        if (snap.temperatureC != null) _temperatureC = snap.temperatureC;
+        _temperatureChecked = snap.temperatureChecked;
       });
       _loadJournal();
     });
@@ -193,6 +194,7 @@ class _RingControlPageState extends State<RingControlPage> {
     int? distance;
     var sleep = 0;
     var sawSleep = false;
+    double? temperature;
     for (final row in rows) {
       final event = row.event;
       if (event.sensorKind != 'ring') continue;
@@ -211,6 +213,9 @@ class _RingControlPageState extends State<RingControlPage> {
         steps ??= _asInt(event.values['steps']);
         calories ??= _asInt(event.values['calories']);
         distance ??= _asInt(event.values['distance_m']);
+      } else if (event.measurementType == 'temperature') {
+        final celsius = event.values['celsius'];
+        if (celsius is num) temperature ??= celsius.toDouble();
       } else if (event.measurementType == 'sleep') {
         final minutes = _asInt(event.values['duration_min']);
         if (minutes != null) {
@@ -226,6 +231,7 @@ class _RingControlPageState extends State<RingControlPage> {
       _journalCalories = calories;
       _journalDistance = distance;
       _journalSleep = sawSleep ? sleep : null;
+      _journalTemp = temperature;
     });
   }
 
@@ -233,6 +239,24 @@ class _RingControlPageState extends State<RingControlPage> {
   int? _journalCalories;
   int? _journalDistance;
   int? _journalSleep;
+  double? _journalTemp;
+  double? _temperatureC;
+  bool _temperatureChecked = false;
+
+  void _pushNotice(RingNotice notice) {
+    if (_notices.isNotEmpty && _notices.first.label == notice.label) {
+      final previous = _notices.first;
+      _notices[0] = RingNotice(
+        at: notice.at,
+        hex: notice.hex.isEmpty ? previous.hex : notice.hex,
+        label: notice.label,
+        count: previous.count + 1,
+      );
+      return;
+    }
+    _notices.insert(0, notice);
+    if (_notices.length > 12) _notices.removeLast();
+  }
 
   bool get _connected {
     final preview = widget.preview;
@@ -259,226 +283,223 @@ class _RingControlPageState extends State<RingControlPage> {
         _live('sleep', 'duration_min') ??
         _journalSleep;
     final battery = _battery ?? preview?.battery;
+    final temperature = _temperatureC ?? _journalTemp;
     return Scaffold(
-      body: CustomScrollView(
+      appBar: AppBar(
+        title: const Text('戒指'),
+        backgroundColor: scheme.surface,
+        surfaceTintColor: scheme.surface,
+        scrolledUnderElevation: 0,
+        notificationPredicate: (_) => false,
+      ),
+      body: ListView(
         controller: _scroll,
         primary: false,
-        slivers: [
-          SliverAppBar(
-            pinned: true,
-            title: const Text('戒指'),
-            backgroundColor: scheme.surface,
-            surfaceTintColor: scheme.surface,
+        padding: const EdgeInsets.fromLTRB(16, 12, 16, 28),
+        children: [
+          _Hero(
+            name: preview?.name ?? widget.devices?.device?.name ?? 'Colmi R',
+            connected: _connected,
+            battery: battery,
+            charging: _charging || (preview?.charging ?? false),
+            lastSync: _historyAt,
           ),
-          SliverPadding(
-            padding: const EdgeInsets.fromLTRB(16, 8, 16, 28),
-            sliver: SliverList(
-              delegate: SliverChildListDelegate([
-                _Hero(
-                  name:
-                      preview?.name ??
-                      widget.devices?.device?.name ??
-                      'Colmi R',
-                  connected: _connected,
-                  battery: battery,
-                  charging: _charging || (preview?.charging ?? false),
-                  lastSync: _historyAt,
+          const SizedBox(height: 16),
+          Row(
+            children: [
+              Expanded(
+                child: _LiveCard(
+                  label: '心率',
+                  value: hr,
+                  unit: 'bpm',
+                  icon: Icons.favorite,
+                  live: _measuring && _connected,
+                  onStart: () => _act(RingAction.startHeart),
+                  onStop: () => _act(RingAction.stopHeart),
+                  measuring: _measuring,
                 ),
-                const SizedBox(height: 16),
-                Row(
-                  children: [
-                    Expanded(
-                      child: _LiveCard(
-                        label: '心率',
-                        value: hr,
-                        unit: 'bpm',
-                        icon: Icons.favorite,
-                        live: _measuring && _connected,
-                        onStart: () => _act(RingAction.startHeart),
-                        onStop: () => _act(RingAction.stopHeart),
-                        measuring: _measuring,
-                      ),
-                    ),
-                    const SizedBox(width: 8),
-                    Expanded(
-                      child: _LiveCard(
-                        label: '血氧',
-                        value: spo2,
-                        unit: '%',
-                        icon: Icons.water_drop_outlined,
-                        live: false,
-                      ),
-                    ),
-                    const SizedBox(width: 8),
-                    Expanded(
-                      child: _LiveCard(
-                        label: 'HRV',
-                        value: hrv,
-                        unit: 'ms',
-                        icon: Icons.monitor_heart_outlined,
-                        live: false,
-                      ),
-                    ),
-                  ],
+              ),
+              const SizedBox(width: 8),
+              Expanded(
+                child: _LiveCard(
+                  label: '血氧',
+                  value: spo2,
+                  unit: '%',
+                  icon: Icons.water_drop_outlined,
+                  live: false,
                 ),
-                const SizedBox(height: 16),
-                Text('今天', style: Theme.of(context).textTheme.titleMedium),
-                const SizedBox(height: 8),
-                _TodayCard(
-                  steps: steps,
-                  calories: calories,
-                  distanceMeters: distance,
-                  sleepMinutes: sleep,
-                  heart: preview?.heartSeries ?? _heartSeries,
-                  stress: preview?.stressSeries ?? _stressSeries,
-                  color: scheme.primary,
+              ),
+              const SizedBox(width: 8),
+              Expanded(
+                child: _LiveCard(
+                  label: 'HRV',
+                  value: hrv,
+                  unit: 'ms',
+                  icon: Icons.monitor_heart_outlined,
+                  live: false,
                 ),
-                const SizedBox(height: 16),
-                Text('自动测量', style: Theme.of(context).textTheme.titleMedium),
-                const SizedBox(height: 8),
-                _AutoCard(
-                  title: '心率',
-                  enabled: _hrAuto,
-                  unsupported: _hrUnsupported,
-                  minutes: _hrEvery,
-                  onChanged: (value) => setState(() => _hrAuto = value),
-                  onMinutes: (value) => setState(() => _hrEvery = value),
-                  onRead: () => _readAuto('heart_rate'),
-                  onSave: () => _writeAuto('heart_rate', _hrAuto, _hrEvery),
-                ),
-                _AutoCard(
-                  title: '血氧',
-                  enabled: _spo2Auto,
-                  unsupported: _spo2Unsupported,
-                  minutes: _spo2Every,
-                  onChanged: (value) => setState(() => _spo2Auto = value),
-                  onMinutes: (value) => setState(() => _spo2Every = value),
-                  onRead: () => _readAuto('spo2'),
-                  onSave: () => _writeAuto('spo2', _spo2Auto, _spo2Every),
-                ),
-                _AutoCard(
-                  title: '压力',
-                  enabled: _stressAuto,
-                  unsupported: _stressUnsupported,
-                  minutes: _stressEvery,
-                  onChanged: (value) => setState(() => _stressAuto = value),
-                  onMinutes: (value) => setState(() => _stressEvery = value),
-                  onRead: () => _readAuto('stress'),
-                  onSave: () => _writeAuto('stress', _stressAuto, _stressEvery),
-                ),
-                const SizedBox(height: 8),
-                Text('工具', style: Theme.of(context).textTheme.titleMedium),
-                const SizedBox(height: 8),
-                Wrap(
-                  spacing: 12,
-                  runSpacing: 12,
-                  children: [
-                    _Tool(
-                      icon: Icons.wifi_tethering,
-                      label: '找戒指',
-                      onTap: () => _act(RingAction.find),
-                    ),
-                    _Tool(
-                      icon: Icons.schedule,
-                      label: '同步时间',
-                      onTap: () => _act(RingAction.syncTime),
-                    ),
-                    _Tool(
-                      icon: Icons.sync,
-                      label: '立即同步',
-                      onTap: () => _act(RingAction.syncHistory),
-                    ),
-                    _Tool(
-                      icon: Icons.battery_charging_full,
-                      label: '读取电量',
-                      onTap: () => _act(RingAction.battery),
-                    ),
-                  ],
-                ),
-                const SizedBox(height: 16),
-                Row(
+              ),
+            ],
+          ),
+          if (preview == null) ...[
+            const SizedBox(height: 8),
+            _TemperatureCard(
+              celsius: temperature,
+              checked: _temperatureChecked || _journalTemp != null,
+            ),
+          ],
+          const SizedBox(height: 16),
+          Text('今天', style: Theme.of(context).textTheme.titleMedium),
+          const SizedBox(height: 8),
+          _TodayCard(
+            steps: steps,
+            calories: calories,
+            distanceMeters: distance,
+            sleepMinutes: sleep,
+            heart: preview?.heartSeries ?? _heartSeries,
+            stress: preview?.stressSeries ?? _stressSeries,
+            color: scheme.primary,
+          ),
+          const SizedBox(height: 16),
+          Text('自动测量', style: Theme.of(context).textTheme.titleMedium),
+          const SizedBox(height: 8),
+          _AutoCard(
+            title: '心率',
+            enabled: _hrAuto,
+            unsupported: _hrUnsupported,
+            minutes: _hrEvery,
+            onChanged: (value) => setState(() => _hrAuto = value),
+            onMinutes: (value) => setState(() => _hrEvery = value),
+            onRead: () => _readAuto('heart_rate'),
+            onSave: () => _writeAuto('heart_rate', _hrAuto, _hrEvery),
+          ),
+          _AutoCard(
+            title: '血氧',
+            enabled: _spo2Auto,
+            unsupported: _spo2Unsupported,
+            minutes: _spo2Every,
+            onChanged: (value) => setState(() => _spo2Auto = value),
+            onMinutes: (value) => setState(() => _spo2Every = value),
+            onRead: () => _readAuto('spo2'),
+            onSave: () => _writeAuto('spo2', _spo2Auto, _spo2Every),
+          ),
+          _AutoCard(
+            title: '压力',
+            enabled: _stressAuto,
+            unsupported: _stressUnsupported,
+            minutes: _stressEvery,
+            onChanged: (value) => setState(() => _stressAuto = value),
+            onMinutes: (value) => setState(() => _stressEvery = value),
+            onRead: () => _readAuto('stress'),
+            onSave: () => _writeAuto('stress', _stressAuto, _stressEvery),
+          ),
+          const SizedBox(height: 8),
+          Text('工具', style: Theme.of(context).textTheme.titleMedium),
+          const SizedBox(height: 8),
+          Wrap(
+            spacing: 12,
+            runSpacing: 12,
+            children: [
+              _Tool(
+                icon: Icons.wifi_tethering,
+                label: '找戒指',
+                onTap: () => _act(RingAction.find),
+              ),
+              _Tool(
+                icon: Icons.schedule,
+                label: '同步时间',
+                onTap: () => _act(RingAction.syncTime),
+              ),
+              _Tool(
+                icon: Icons.sync,
+                label: '立即同步',
+                onTap: () => _act(RingAction.syncHistory),
+              ),
+              _Tool(
+                icon: Icons.battery_charging_full,
+                label: '读取电量',
+                onTap: () => _act(RingAction.battery),
+              ),
+            ],
+          ),
+          const SizedBox(height: 16),
+          Row(
+            children: [
+              Text('戒指事件', style: Theme.of(context).textTheme.titleMedium),
+              const Spacer(),
+              TextButton(
+                onPressed: () => setState(() => _showHex = !_showHex),
+                child: Text(_showHex ? '隐藏开发者信息' : '开发者信息'),
+              ),
+            ],
+          ),
+          if (_notices.isEmpty)
+            Text(
+              '还没有戒指主动发来的通知。',
+              style: TextStyle(color: scheme.onSurfaceVariant),
+            )
+          else
+            for (final notice in _notices.take(8))
+              Padding(
+                padding: const EdgeInsets.only(bottom: 8),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     Text(
-                      '戒指事件',
-                      style: Theme.of(context).textTheme.titleMedium,
+                      '${_shanghai(notice.at)}  ${notice.count > 1 ? '${notice.label} ×${notice.count}' : notice.label}',
+                      style: const TextStyle(fontSize: 13),
                     ),
-                    const Spacer(),
-                    TextButton(
-                      onPressed: () => setState(() => _showHex = !_showHex),
-                      child: Text(_showHex ? '隐藏开发者信息' : '开发者信息'),
-                    ),
+                    if (_showHex && notice.hex.isNotEmpty)
+                      Text(
+                        notice.hex,
+                        style: TextStyle(
+                          fontSize: 11,
+                          color: scheme.onSurfaceVariant,
+                        ),
+                      ),
                   ],
                 ),
-                if (_notices.isEmpty)
+              ),
+          const SizedBox(height: 8),
+          Card(
+            color: scheme.errorContainer.withValues(alpha: 0.35),
+            child: Padding(
+              padding: const EdgeInsets.all(16),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
                   Text(
-                    '还没有戒指主动发来的通知。',
-                    style: TextStyle(color: scheme.onSurfaceVariant),
-                  )
-                else
-                  for (final notice in _notices.take(8))
-                    Padding(
-                      padding: const EdgeInsets.only(bottom: 8),
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text(
-                            '${_shanghai(notice.at)}  ${notice.label}',
-                            style: const TextStyle(fontSize: 13),
-                          ),
-                          if (_showHex && notice.hex.isNotEmpty)
-                            Text(
-                              notice.hex,
-                              style: TextStyle(
-                                fontSize: 11,
-                                color: scheme.onSurfaceVariant,
-                              ),
-                            ),
-                        ],
-                      ),
-                    ),
-                const SizedBox(height: 8),
-                Card(
-                  color: scheme.errorContainer.withValues(alpha: 0.35),
-                  child: Padding(
-                    padding: const EdgeInsets.all(16),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(
-                          '危险操作',
-                          style: TextStyle(
-                            color: scheme.error,
-                            fontWeight: FontWeight.w700,
-                          ),
-                        ),
-                        const SizedBox(height: 12),
-                        Wrap(
-                          spacing: 12,
-                          runSpacing: 12,
-                          children: [
-                            OutlinedButton(
-                              onPressed: () => _confirm(
-                                '关机',
-                                '戒指会关闭，直到放回充电座。',
-                                RingAction.powerOff,
-                              ),
-                              child: const Text('关机'),
-                            ),
-                            OutlinedButton(
-                              onPressed: () => _confirm(
-                                '恢复出厂',
-                                '戒指里的记录会被清除。',
-                                RingAction.factoryReset,
-                              ),
-                              child: const Text('恢复出厂'),
-                            ),
-                          ],
-                        ),
-                      ],
+                    '危险操作',
+                    style: TextStyle(
+                      color: scheme.error,
+                      fontWeight: FontWeight.w700,
                     ),
                   ),
-                ),
-              ]),
+                  const SizedBox(height: 12),
+                  Wrap(
+                    spacing: 12,
+                    runSpacing: 12,
+                    children: [
+                      OutlinedButton(
+                        onPressed: () => _confirm(
+                          '关机',
+                          '戒指会关闭，直到放回充电座。',
+                          RingAction.powerOff,
+                        ),
+                        child: const Text('关机'),
+                      ),
+                      OutlinedButton(
+                        onPressed: () => _confirm(
+                          '恢复出厂',
+                          '戒指里的记录会被清除。',
+                          RingAction.factoryReset,
+                        ),
+                        child: const Text('恢复出厂'),
+                      ),
+                    ],
+                  ),
+                ],
+              ),
             ),
           ),
         ],
@@ -849,6 +870,30 @@ class _LiveCard extends StatelessWidget {
             ),
           ],
         ),
+      ),
+    );
+  }
+}
+
+class _TemperatureCard extends StatelessWidget {
+  const _TemperatureCard({required this.celsius, required this.checked});
+
+  final double? celsius;
+  final bool checked;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final text = celsius != null
+        ? '${celsius!.toStringAsFixed(1)} °C'
+        : checked
+        ? '该戒指未返回体温'
+        : '正在读取体温';
+    return Card(
+      child: ListTile(
+        leading: Icon(Icons.thermostat, color: scheme.primary),
+        title: const Text('体温'),
+        subtitle: Text(text),
       ),
     );
   }

@@ -2,6 +2,7 @@ import 'dart:convert';
 
 import 'package:http/http.dart' as http;
 
+import 'package:bylwapp/ble/bylw_log.dart';
 import 'package:bylwapp/journal/journal_store.dart';
 
 class SyncFaults {
@@ -58,6 +59,9 @@ class SyncWorker {
   Future<int> syncOnce() async {
     final pending = await journal.pending();
     var synced = 0;
+    var storedCount = 0;
+    var duplicateCount = 0;
+    var errorCount = 0;
     var activeToken = token;
     var activeDevice = deviceId;
     var renewed = false;
@@ -69,6 +73,8 @@ class SyncWorker {
       final attempts = record.attempts + 1;
       try {
         final result = await _post(record, activeToken);
+        if (result == 'stored') storedCount++;
+        if (result == 'duplicate') duplicateCount++;
         if (await _apply(record, result, attempts)) synced++;
       } on IngestException catch (error) {
         final named = error.deviceId;
@@ -81,9 +87,12 @@ class SyncWorker {
           record = await _rebind(record, named);
           try {
             final result = await _post(record, activeToken);
+            if (result == 'stored') storedCount++;
+            if (result == 'duplicate') duplicateCount++;
             if (await _apply(record, result, attempts)) synced++;
             continue;
           } on IngestException catch (again) {
+            errorCount++;
             await _fail(record, attempts, again);
             continue;
           }
@@ -95,14 +104,18 @@ class SyncWorker {
             renewed = true;
             try {
               final result = await _post(record, activeToken);
+              if (result == 'stored') storedCount++;
+              if (result == 'duplicate') duplicateCount++;
               if (await _apply(record, result, attempts)) synced++;
               continue;
             } on IngestException catch (again) {
+              errorCount++;
               await _fail(record, attempts, again);
               continue;
             }
           }
         }
+        errorCount++;
         await _fail(record, attempts, error);
       } catch (error) {
         final read = await _read(
@@ -129,6 +142,7 @@ class SyncWorker {
           );
           continue;
         }
+        errorCount++;
         await journal.mark(
           record.event.eventId,
           state: attempts >= 3 ? 'retry_failed' : 'pending',
@@ -137,6 +151,9 @@ class SyncWorker {
         );
       }
     }
+    bylwLog(
+      'sync stored=$storedCount duplicate=$duplicateCount error=$errorCount',
+    );
     return synced;
   }
 

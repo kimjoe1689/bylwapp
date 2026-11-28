@@ -23,6 +23,8 @@ class RingPacket {
   static const int cmdSyncActivity = 0x43;
   static const int cmdTodaySummary = 0x48;
   static const int cmdManualHeartRate = 0x69;
+  static const int manualHeartRate = 0x01;
+  static const int manualTemperature = 0x0b;
   static const int cmdStopHeartRate = 0x6a;
   static const int cmdFactoryReset = 0xff;
   static const int cmdNotification = 0x73;
@@ -117,7 +119,21 @@ class RingPacket {
 
   /// Starts a manual/realtime heart-rate session: 0x69 0x01 0x01.
   static List<int> startRealtimeHeartRate() =>
-      build(const [cmdManualHeartRate, 0x01, 0x01]);
+      build(const [cmdManualHeartRate, manualHeartRate, 0x01]);
+
+  /// One-shot temperature. The same 0x69 command, subtype 0x0B.
+  static List<int> startRealtimeTemperature() =>
+      build(const [cmdManualHeartRate, manualTemperature, 0x01]);
+
+  /// Empty big-data read: length 0, CRC 0xFFFF. Used for temperature history.
+  static List<int> bigDataRead(int type) => [
+    cmdBigDataV2,
+    type & 0xff,
+    0x00,
+    0x00,
+    0xff,
+    0xff,
+  ];
 
   /// Keep-alive. Gadgetbridge repeats 0x1e while the session is open.
   static List<int> continueRealtimeHeartRate() =>

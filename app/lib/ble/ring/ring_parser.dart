@@ -39,11 +39,51 @@ class BatteryStatus {
   final bool charging;
 }
 
+/// The ring stores history as local wall-clock fields, with no timezone.
+DateTime ringWallClock(
+  int year,
+  int month,
+  int day, [
+  int hour = 0,
+  int minute = 0,
+  int second = 0,
+]) {
+  return DateTime(year, month, day, hour, minute, second);
+}
+
+/// Old builds saved those wall-clock fields with a UTC constructor, so the
+/// stored instant is ahead by the phone's offset. Rebuild the same fields
+/// as a local time.
+DateTime correctedRingInstant(DateTime storedUtc) {
+  final utc = storedUtc.toUtc();
+  return DateTime(
+    utc.year,
+    utc.month,
+    utc.day,
+    utc.hour,
+    utc.minute,
+    utc.second,
+    utc.millisecond,
+    utc.microsecond,
+  );
+}
+
+double? ringCelsius(int raw) {
+  if (raw <= 0) return null;
+  final shifted = raw / 10 + 20;
+  if (shifted >= 30 && shifted <= 42) return shifted;
+  final tenths = raw / 10;
+  if (tenths >= 30 && tenths <= 42) return tenths;
+  final hundredths = raw / 100;
+  if (hundredths >= 30 && hundredths <= 42) return hundredths;
+  if (raw >= 30 && raw <= 42) return raw.toDouble();
+  return null;
+}
+
 /// Decodes one plaintext ring notification into measurements.
 ///
-/// [today] is the ring's local midnight, stored as UTC because the protocol
-/// has no timezone. [now] drops heart-rate slots that the firmware has not
-/// measured yet. [daysAgo] is only used for HRV, which does not carry a date.
+/// [today] is the ring's local midnight. [now] drops heart-rate slots the
+/// firmware has not measured yet. [daysAgo] is only used for HRV.
 RingParseResult parseRingPacket(
   List<int> packet, {
   required DateTime today,
@@ -58,6 +98,9 @@ RingParseResult parseRingPacket(
   if (command == RingPacket.cmdManualHeartRate &&
       packet.length >= 4 &&
       packet.length != 16) {
+    if ((packet[1] & 0xff) == RingPacket.manualTemperature) {
+      return _parseManualTemperature(packet, now);
+    }
     return _parseManualHeartRate(packet, now);
   }
   if (command == RingPacket.cmdBigDataV2) {
@@ -81,6 +124,9 @@ RingParseResult parseRingPacket(
     case RingPacket.cmdSyncHrv:
       return _parseHrv(packet, today, daysAgo);
     case RingPacket.cmdManualHeartRate:
+      if ((packet[1] & 0xff) == RingPacket.manualTemperature) {
+        return _parseManualTemperature(packet, now);
+      }
       return _parseManualHeartRate(packet, now);
     case RingPacket.cmdRealtimeHeartRate:
       return _parseRealtimeHeartRate(packet, now);
@@ -91,33 +137,49 @@ RingParseResult parseRingPacket(
   }
 }
 
-/// A short label for the event feed. Null hides the realtime heart-rate stream.
+/// A short label for unsolicited events. Null hides realtime streams and
+/// replies that belong to a history sync.
 String? ringNoticeLabel(List<int> packet) {
   if (packet.isEmpty) return null;
   final command = packet[0] & 0xff;
-  if (command == RingPacket.cmdManualHeartRate ||
-      command == RingPacket.cmdRealtimeHeartRate) {
+  if (command == RingPacket.cmdRealtimeHeartRate) return null;
+  if (command == RingPacket.cmdManualHeartRate) {
+    if (packet.length > 1 &&
+        (packet[1] & 0xff) == RingPacket.manualTemperature) {
+      final parsed = _parseManualTemperature(packet, DateTime.now());
+      final celsius = parsed.measurements.isEmpty
+          ? null
+          : parsed.measurements.single.values['celsius'];
+      if (celsius is num) return '体温 ${celsius.toStringAsFixed(1)}';
+    }
     return null;
   }
+  if (_routineHistoryCommand(command)) return null;
+  if (parseLiveActivity(packet) != null) return null;
   final battery = parseBattery(packet);
-  if (battery != null) {
-    return '电量 ${battery.percent}%';
-  }
+  if (battery != null) return '电量 ${battery.percent}%';
   if (command == RingPacket.cmdBattery && packet.length >= 2) {
     return '电量 ${packet[1] & 0xff}%';
   }
-  final live = parseLiveActivity(packet);
-  if (live != null) {
-    return '步数 ${live.steps}';
-  }
+  if (command == RingPacket.cmdFind) return '戒指已响应寻找';
+  return 'unknown 0x${command.toRadixString(16).padLeft(2, '0')}';
+}
+
+bool _routineHistoryCommand(int command) {
   return switch (command) {
-    RingPacket.cmdSetDateTime => '时间已同步',
-    RingPacket.cmdFind => '戒指已响应寻找',
-    RingPacket.cmdSyncHeartRate => '心率历史',
-    RingPacket.cmdSyncActivity || RingPacket.cmdTodaySummary => '今日活动',
-    RingPacket.cmdBigDataV2 => '历史数据',
-    RingPacket.cmdStopHeartRate => '已停止心率',
-    _ => 'unknown 0x${command.toRadixString(16).padLeft(2, '0')}',
+    RingPacket.cmdSetDateTime ||
+    RingPacket.cmdSyncHeartRate ||
+    RingPacket.cmdAutoHeartRate ||
+    RingPacket.cmdAutoSpo2 ||
+    RingPacket.cmdAutoStress ||
+    RingPacket.cmdSyncStress ||
+    RingPacket.cmdSyncHrv ||
+    RingPacket.cmdAutoTempPref ||
+    RingPacket.cmdSyncActivity ||
+    RingPacket.cmdTodaySummary ||
+    RingPacket.cmdStopHeartRate ||
+    RingPacket.cmdBigDataV2 => true,
+    _ => false,
   };
 }
 
@@ -163,7 +225,7 @@ RingParseResult _parseActivity(List<int> packet) {
     return const RingParseResult(ignored: true);
   }
   final hour = (packet[4] & 0xff) ~/ 4;
-  final recordedAt = DateTime.utc(2000 + year, month, day, hour);
+  final recordedAt = ringWallClock(2000 + year, month, day, hour);
   final calories = u16le(packet, 7);
   final steps = u16le(packet, 9);
   final distance = u16le(packet, 11);
@@ -219,7 +281,7 @@ RingParseResult _parseHeartRateHistory(
       continue;
     }
     final minuteOfDay = previousMinutes + (i - start) * 5;
-    final recordedAt = DateTime.utc(
+    final recordedAt = ringWallClock(
       today.year,
       today.month,
       today.day,
@@ -276,7 +338,7 @@ RingParseResult _parseStress(List<int> packet, DateTime today) {
       HealthMeasurement(
         type: 'stress',
         unit: 'level',
-        recordedAt: DateTime.utc(
+        recordedAt: ringWallClock(
           today.year,
           today.month,
           today.day,
@@ -326,7 +388,7 @@ RingParseResult _parseHrv(List<int> packet, DateTime today, int daysAgo) {
       HealthMeasurement(
         type: 'hrv',
         unit: 'ms',
-        recordedAt: DateTime.utc(
+        recordedAt: ringWallClock(
           day.year,
           day.month,
           day.day,
@@ -341,6 +403,27 @@ RingParseResult _parseHrv(List<int> packet, DateTime today, int daysAgo) {
     measurements: samples,
     dayComplete: number == 4,
     packetNumber: number,
+  );
+}
+
+RingParseResult _parseManualTemperature(List<int> packet, DateTime now) {
+  if (packet.length < 4) return const RingParseResult(ignored: true);
+  final raw = (packet[2] & 0xff) == 0
+      ? packet[3] & 0xff
+      : (packet[2] & 0xff) | ((packet[3] & 0xff) << 8);
+  final celsius = ringCelsius(raw);
+  if (celsius == null) {
+    return const RingParseResult(empty: true);
+  }
+  return RingParseResult(
+    measurements: [
+      HealthMeasurement(
+        type: 'temperature',
+        unit: '°C',
+        recordedAt: now.toUtc(),
+        values: {'celsius': celsius, 'raw': raw, 'source': 'manual'},
+      ),
+    ],
   );
 }
 
@@ -462,7 +545,7 @@ List<HealthMeasurement> _spo2(List<int> payload, DateTime today) {
           HealthMeasurement(
             type: 'spo2',
             unit: '%',
-            recordedAt: DateTime.utc(day.year, day.month, day.day, hour),
+            recordedAt: ringWallClock(day.year, day.month, day.day, hour),
             values: {'spo2': ((min + max) / 2).round(), 'min': min, 'max': max},
           ),
         );
@@ -488,7 +571,8 @@ List<HealthMeasurement> _sleep(List<int> payload, DateTime today) {
     final sleepStart = u16le(payload, index + 2);
     final sleepEnd = u16le(payload, index + 4);
     index += 6;
-    final midnight = today.subtract(Duration(days: daysAgo));
+    final day = today.subtract(Duration(days: daysAgo));
+    final midnight = ringWallClock(day.year, day.month, day.day);
     final start = midnight.add(
       Duration(minutes: sleepStart > sleepEnd ? sleepStart - 1440 : sleepStart),
     );
@@ -563,7 +647,7 @@ HealthMeasurement _temp(DateTime day, int hour, int minute, int raw) {
   return HealthMeasurement(
     type: 'temperature',
     unit: '°C',
-    recordedAt: DateTime.utc(day.year, day.month, day.day, hour, minute),
+    recordedAt: ringWallClock(day.year, day.month, day.day, hour, minute),
     values: {'celsius': raw / 10 + 20},
   );
 }

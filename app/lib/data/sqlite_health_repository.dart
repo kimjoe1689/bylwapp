@@ -52,6 +52,41 @@ class SqliteHealthRepository implements HealthRepository {
 
   Future<void> close() => _db.close();
 
+  /// History rows stored the ring's local clock as UTC. Shift them back once.
+  Future<int> correctRingHistoryClock() async {
+    final rows = await _db.rawQuery('''
+      SELECT m.id, m.recorded_at
+      FROM measurements m
+      JOIN devices d ON d.address = m.device_address
+      WHERE d.kind = 'ring' AND m.values_json LIKE '%"stream":"history"%'
+    ''');
+    var changed = 0;
+    for (final row in rows) {
+      final stored = DateTime.parse(row['recorded_at'] as String).toUtc();
+      final fixed = DateTime(
+        stored.year,
+        stored.month,
+        stored.day,
+        stored.hour,
+        stored.minute,
+        stored.second,
+        stored.millisecond,
+        stored.microsecond,
+      ).toUtc();
+      if (fixed == stored) continue;
+      try {
+        await _db.update(
+          'measurements',
+          {'recorded_at': fixed.toIso8601String()},
+          where: 'id = ?',
+          whereArgs: [row['id']],
+        );
+        changed++;
+      } catch (_) {}
+    }
+    return changed;
+  }
+
   @override
   Future<void> upsertDevice(HealthDevice device) async {
     await _db.insert('devices', {

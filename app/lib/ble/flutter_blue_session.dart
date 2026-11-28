@@ -56,6 +56,7 @@ class FlutterBlueSession implements BleClient {
   Timer? _ringKeepalive;
   bool _ringBusy = false;
   bool _measuringHr = false;
+  int _ringHistoryDays = 1;
   final StreamController<RingNotice> _ringNotices =
       StreamController<RingNotice>.broadcast();
   final StreamController<RingSnapshot> _ringSnapshots =
@@ -70,6 +71,11 @@ class FlutterBlueSession implements BleClient {
 
   @override
   Stream<RingSnapshot> get ringSnapshots => _ringSnapshots.stream;
+
+  @override
+  void setRingHistoryDepth(int days) {
+    _ringHistoryDays = days < 0 ? 0 : (days > 7 ? 7 : days);
+  }
 
   void _publishRing(RingSnapshot next, {RingNotice? notice}) {
     _ringSnapshot = next;
@@ -213,8 +219,9 @@ class FlutterBlueSession implements BleClient {
       return 0;
     }
     return _syncRing(
-      YawellRingDriver().supportsTemperature(_connectedName),
+      true,
       temperatureLoggingEnabled: temperatureLoggingEnabled,
+      maxDaysAgo: _ringHistoryDays,
     );
   }
 
@@ -354,6 +361,53 @@ class FlutterBlueSession implements BleClient {
           );
         }
       });
+      await _ringStage('temperature-live', () async {
+        final bytes = RingPacket.startRealtimeTemperature();
+        final hex = bytes
+            .map((byte) => byte.toRadixString(16).padLeft(2, '0'))
+            .join(' ');
+        bylwLog('tx temperature-live $hex');
+        await _writeRing(bytes, 'temperature-live');
+        final packet = await _awaitCommand(
+          RingPacket.cmdManualHeartRate,
+          subtype: RingPacket.manualTemperature,
+        );
+        if (packet == null) {
+          bylwLog('rx temperature-live timeout');
+          _publishRing(_ringSnapshot.copyWith(temperatureChecked: true));
+          return;
+        }
+        final rx = packet
+            .map((byte) => byte.toRadixString(16).padLeft(2, '0'))
+            .join(' ');
+        bylwLog('rx temperature-live $rx');
+        final parsed = parseRingPacket(
+          packet,
+          today: DateTime.now(),
+          now: DateTime.now(),
+        );
+        final celsius = parsed.measurements.isEmpty
+            ? null
+            : parsed.measurements.single.values['celsius'];
+        if (celsius is num) {
+          _publishRing(
+            _ringSnapshot.copyWith(
+              temperatureC: celsius.toDouble(),
+              temperatureChecked: true,
+            ),
+            notice: RingNotice(
+              at: DateTime.now(),
+              hex: rx,
+              label: '体温 ${celsius.toStringAsFixed(1)}',
+            ),
+          );
+          for (final measurement in parsed.measurements) {
+            await _deliver(measurement);
+          }
+        } else {
+          _publishRing(_ringSnapshot.copyWith(temperatureChecked: true));
+        }
+      });
       await _ringStage('realtime-hr', () async {
         await _writeRing(RingPacket.startRealtimeHeartRate(), 'realtime-hr');
         _measuringHr = true;
@@ -361,9 +415,11 @@ class FlutterBlueSession implements BleClient {
       });
       await _ringStage('history', () async {
         final saved = await _syncRing(
-          (_driver as YawellRingDriver).supportsTemperature(_connectedName),
+          true,
           temperatureLoggingEnabled: false,
+          maxDaysAgo: _ringHistoryDays,
         );
+        _ringHistoryDays = 0;
         bylwLog('stage history saved=$saved');
         _publishRing(
           _ringSnapshot.copyWith(historySyncedAt: DateTime.now()),
@@ -538,7 +594,7 @@ class FlutterBlueSession implements BleClient {
     }
   }
 
-  Future<List<int>?> _awaitCommand(int command) async {
+  Future<List<int>?> _awaitCommand(int command, {int? subtype}) async {
     _syncing = true;
     _inbox.clear();
     try {
@@ -549,9 +605,12 @@ class FlutterBlueSession implements BleClient {
           return null;
         }
         final packet = await _nextPacket(remaining);
-        if (packet.isNotEmpty && (packet[0] & 0xff) == command) {
-          return packet;
+        if (packet.isEmpty || (packet[0] & 0xff) != command) continue;
+        if (subtype != null &&
+            (packet.length < 2 || (packet[1] & 0xff) != subtype)) {
+          continue;
         }
+        return packet;
       }
     } on TimeoutException {
       return null;
@@ -694,11 +753,13 @@ class FlutterBlueSession implements BleClient {
   Future<int> _syncRing(
     bool temperatureCapable, {
     required bool temperatureLoggingEnabled,
+    int maxDaysAgo = 1,
   }) async {
     final cursor = RingSyncCursor(
-      now: DateTime.now().toUtc(),
+      now: DateTime.now(),
       temperatureCapable: temperatureCapable,
       temperatureLoggingEnabled: temperatureLoggingEnabled,
+      maxDaysAgo: maxDaysAgo,
     );
     _syncing = true;
     _inbox.clear();
@@ -738,7 +799,7 @@ class FlutterBlueSession implements BleClient {
             allowLongWrite: command.bytes.length > 20,
           );
         }
-        final deadline = DateTime.now().add(const Duration(seconds: 8));
+        final deadline = DateTime.now().add(cursor.commandTimeout);
         var timedOut = false;
         while (cursor.awaitingMore && !timedOut) {
           final remaining = deadline.difference(DateTime.now());
@@ -753,6 +814,20 @@ class FlutterBlueSession implements BleClient {
             final measurements = cursor.consume(packet);
             saved += measurements.length;
             for (final measurement in measurements) {
+              if (measurement.type == 'temperature') {
+                final celsius = measurement.values['celsius'];
+                if (celsius is num) {
+                  bylwLog(
+                    'rx temperature-history ${celsius.toStringAsFixed(1)}',
+                  );
+                  _publishRing(
+                    _ringSnapshot.copyWith(
+                      temperatureC: celsius.toDouble(),
+                      temperatureChecked: true,
+                    ),
+                  );
+                }
+              }
               await _deliver(measurement);
             }
           } on TimeoutException {

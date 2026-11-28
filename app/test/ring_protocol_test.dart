@@ -101,7 +101,7 @@ void main() {
     final parsed = parseRingPacket(packet, today: today, now: now);
     final sample = parsed.measurements.single;
     expect(sample.type, 'steps');
-    expect(sample.recordedAt, DateTime.utc(2026, 11, 27, 9));
+    expect(sample.recordedAt, ringWallClock(2026, 11, 27, 9));
     expect(sample.values['steps'], 1000);
     expect(sample.values['calories'], 100);
     expect(sample.values['distance_m'], 300);
@@ -127,7 +127,7 @@ void main() {
     ]);
     expect(
       parsed.measurements.single.recordedAt,
-      DateTime.utc(2026, 11, 27, 0, 0),
+      ringWallClock(2026, 11, 27),
     );
   });
 
@@ -223,10 +223,10 @@ void main() {
       now: now,
     ).measurements;
     expect(sleepParsed.first.type, 'sleep_session');
-    expect(sleepParsed.first.recordedAt, DateTime.utc(2026, 11, 26, 23));
+    expect(sleepParsed.first.recordedAt, ringWallClock(2026, 11, 26, 23));
     expect(sleepParsed[1].values['stage'], 'deep');
     expect(sleepParsed[2].values['stage'], 'light');
-    expect(sleepParsed[2].recordedAt, DateTime.utc(2026, 11, 27, 0));
+    expect(sleepParsed[2].recordedAt, ringWallClock(2026, 11, 27));
 
     final stress = RingPacket.build([
       RingPacket.cmdSyncStress,
@@ -245,7 +245,7 @@ void main() {
       40,
       41,
     ]);
-    expect(stressSamples[1].recordedAt, DateTime.utc(2026, 11, 27, 1));
+    expect(stressSamples[1].recordedAt, ringWallClock(2026, 11, 27, 1));
 
     final hrv = RingPacket.build([RingPacket.cmdSyncHrv, 0x01, 0x00, 45]);
     final hrvSample = parseRingPacket(
@@ -255,7 +255,7 @@ void main() {
       daysAgo: 1,
     ).measurements.single;
     expect(hrvSample.values['hrv_ms'], 45);
-    expect(hrvSample.recordedAt, DateTime.utc(2026, 11, 26));
+    expect(hrvSample.recordedAt, ringWallClock(2026, 11, 26));
 
     final tempPayload = <int>[0, 0x1E, 165, 0, ...List<int>.filled(46, 0)];
     expect(tempPayload, hasLength(50));
@@ -293,17 +293,59 @@ void main() {
     expect(enable.bytes.sublist(0, 4), [0x3A, 0x03, 0x02, 0x01]);
     cursor.consume(enable.bytes);
     final history = cursor.nextCommand()!;
-    expect(history.bytes.sublist(0, 2), [0xBC, 0x25]);
-    expect(history.bytes.sublist(2), [0x01, 0x00, 0x3E, 0x81, 0x02]);
+    expect(history.bytes, [0xBC, 0x25, 0x00, 0x00, 0xFF, 0xFF]);
   });
 
-  test('a timed-out ring command skips that stage and keeps going', () {
+  test('a timed-out day stops the older days in that stage', () {
     final cursor = RingSyncCursor(now: now, temperatureCapable: false);
     expect(cursor.nextCommand()!.label, 'activity-0');
+    expect(cursor.commandTimeout, const Duration(seconds: 8));
     cursor.skipCurrent();
-    expect(cursor.daysAgo, 1);
-    expect(cursor.awaitingMore, isFalse);
-    expect(cursor.nextCommand()!.label, 'activity-1');
+    expect(cursor.phase, RingSyncPhase.heartRate);
+    expect(cursor.nextCommand()!.label, 'heart-rate-0');
+  });
+
+  test('history only walks days since the last success', () {
+    final cursor = RingSyncCursor(
+      now: now,
+      temperatureCapable: false,
+      maxDaysAgo: 0,
+    );
+    expect(cursor.nextCommand()!.label, 'activity-0');
+    cursor.consume(RingPacket.build(const [RingPacket.cmdSyncActivity, 0xFF]));
+    expect(cursor.nextCommand()!.label, 'heart-rate-0');
+    expect(ringHistoryDepth(null, DateTime(2026, 11, 28, 16)), 1);
+    expect(
+      ringHistoryDepth(DateTime(2026, 11, 28, 9), DateTime(2026, 11, 28, 16)),
+      0,
+    );
+    expect(
+      ringHistoryDepth(DateTime(2026, 11, 26, 9), DateTime(2026, 11, 28, 16)),
+      2,
+    );
+  });
+
+  test('manual temperature uses the 0x69 subtype and local history clocks', () {
+    final packet = RingPacket.build(const [
+      RingPacket.cmdManualHeartRate,
+      RingPacket.manualTemperature,
+      0x00,
+      165,
+    ]);
+    final parsed = parseRingPacket(packet, today: today, now: now);
+    expect(parsed.measurements.single.values['celsius'], 36.5);
+    expect(ringNoticeLabel(packet), '体温 36.5');
+    expect(
+      ringNoticeLabel(RingPacket.build(const [RingPacket.cmdSyncHeartRate])),
+      isNull,
+    );
+    final wall = ringWallClock(2026, 11, 28, 16, 30);
+    expect(wall.hour, 16);
+    expect(wall.minute, 30);
+    expect(wall.isUtc, isFalse);
+    final fixed = correctedRingInstant(DateTime.utc(2026, 11, 28, 23, 30));
+    expect(fixed.toLocal().hour, 23);
+    expect(fixed.toLocal().minute, 30);
   });
 
   test('history rows bypass the realtime persist gate', () {

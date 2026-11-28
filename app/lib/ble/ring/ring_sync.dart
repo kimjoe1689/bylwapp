@@ -40,17 +40,23 @@ class RingSyncCursor {
     required DateTime now,
     required this.temperatureCapable,
     this.temperatureLoggingEnabled = false,
-  }) : now = now.toUtc(),
-       today = DateTime.utc(
-         now.toUtc().year,
-         now.toUtc().month,
-         now.toUtc().day,
+    this.maxDaysAgo = 1,
+  }) : now = now,
+       today = DateTime(
+         now.toLocal().year,
+         now.toLocal().month,
+         now.toLocal().day,
        );
 
   final DateTime now;
   final DateTime today;
   final bool temperatureCapable;
+  final int maxDaysAgo;
   bool temperatureLoggingEnabled;
+
+  /// Older days often have no reply. Don't wait the full history timeout.
+  Duration get commandTimeout =>
+      daysAgo == 0 ? const Duration(seconds: 8) : const Duration(seconds: 2);
 
   RingSyncPhase phase = RingSyncPhase.activity;
   int daysAgo = 0;
@@ -80,14 +86,7 @@ class RingSyncCursor {
         ]);
       case RingSyncPhase.heartRate:
         final instant = daysAgo == 0
-            ? DateTime.utc(
-                now.year,
-                now.month,
-                now.day,
-                now.hour,
-                now.minute,
-                now.second,
-              )
+            ? now.toLocal()
             : today.subtract(Duration(days: daysAgo));
         final seconds = instant.millisecondsSinceEpoch ~/ 1000;
         return _v1('heart-rate-$daysAgo', [
@@ -138,15 +137,10 @@ class RingSyncCursor {
             label: 'enable-temperature',
           );
         }
-        return _v2('temperature', const [
-          RingPacket.cmdBigDataV2,
-          RingPacket.bigDataTemperature,
-          0x01,
-          0x00,
-          0x3e,
-          0x81,
-          0x02,
-        ]);
+        return _v2(
+          'temperature',
+          RingPacket.bigDataRead(RingPacket.bigDataTemperature),
+        );
       case RingSyncPhase.done:
         return null;
     }
@@ -195,49 +189,65 @@ class RingSyncCursor {
     ];
   }
 
-  /// Drops the command that timed out and moves to the next stage.
+  /// A timeout means this day did not answer. Stop asking for older days.
   void skipCurrent() {
     _awaitingTemperatureAck = false;
     _requestOpen = false;
-    _advance();
+    _endPhase();
   }
 
   void _advance() {
     switch (phase) {
       case RingSyncPhase.activity:
-        if (daysAgo < 7) {
+        if (daysAgo < maxDaysAgo) {
           daysAgo += 1;
         } else {
-          daysAgo = 0;
-          hrPacketTotal = null;
-          phase = RingSyncPhase.heartRate;
+          _endPhase();
         }
       case RingSyncPhase.heartRate:
-        if (daysAgo < 7) {
+        if (daysAgo < maxDaysAgo) {
           daysAgo += 1;
           hrPacketTotal = null;
         } else {
-          phase = RingSyncPhase.stress;
+          _endPhase();
         }
+      case RingSyncPhase.stress:
+      case RingSyncPhase.spo2:
+      case RingSyncPhase.sleep:
+        _endPhase();
+      case RingSyncPhase.hrv:
+        if (daysAgo < maxDaysAgo) {
+          daysAgo += 1;
+        } else {
+          _endPhase();
+        }
+      case RingSyncPhase.temperature:
+      case RingSyncPhase.done:
+        _endPhase();
+    }
+  }
+
+  void _endPhase() {
+    daysAgo = 0;
+    hrPacketTotal = null;
+    switch (phase) {
+      case RingSyncPhase.activity:
+        phase = RingSyncPhase.heartRate;
+      case RingSyncPhase.heartRate:
+        phase = RingSyncPhase.stress;
       case RingSyncPhase.stress:
         phase = RingSyncPhase.spo2;
       case RingSyncPhase.spo2:
         phase = RingSyncPhase.sleep;
       case RingSyncPhase.sleep:
-        daysAgo = 0;
         phase = RingSyncPhase.hrv;
       case RingSyncPhase.hrv:
-        if (daysAgo < 6) {
-          daysAgo += 1;
-        } else if (temperatureCapable) {
-          phase = RingSyncPhase.temperature;
-        } else {
-          phase = RingSyncPhase.done;
-        }
+        phase = temperatureCapable
+            ? RingSyncPhase.temperature
+            : RingSyncPhase.done;
       case RingSyncPhase.temperature:
-        phase = RingSyncPhase.done;
       case RingSyncPhase.done:
-        break;
+        phase = RingSyncPhase.done;
     }
   }
 
@@ -258,6 +268,22 @@ class RingSyncCursor {
       label: label,
     );
   }
+}
+
+/// Days of history to request. A first sync asks for today and yesterday.
+/// Later syncs only cover days since the last successful one.
+int ringHistoryDepth(DateTime? lastSuccess, DateTime now) {
+  if (lastSuccess == null) return 1;
+  final today = DateTime(now.year, now.month, now.day);
+  final then = DateTime(
+    lastSuccess.toLocal().year,
+    lastSuccess.toLocal().month,
+    lastSuccess.toLocal().day,
+  );
+  final days = today.difference(then).inDays;
+  if (days < 0) return 0;
+  if (days > 7) return 7;
+  return days;
 }
 
 bool ringNameSupportsTemperature(String name) {

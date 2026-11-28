@@ -75,6 +75,9 @@ abstract class BleClient {
   RingSnapshot get ringSnapshot;
 
   Stream<RingSnapshot> get ringSnapshots;
+
+  /// How many days before today the next history sync should request.
+  void setRingHistoryDepth(int days);
 }
 
 class FakeBleClient implements BleClient {
@@ -134,4 +137,7 @@ class FakeBleClient implements BleClient {
 
   @override
   Stream<RingSnapshot> get ringSnapshots => _ringSnapshots.stream;
+
+  @override
+  void setRingHistoryDepth(int days) {}
 }

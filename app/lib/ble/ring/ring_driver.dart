@@ -51,11 +51,8 @@ class YawellRingDriver implements HealthDeviceDriver {
     List<int> packet, {
     required DateTime now,
   }) {
-    final today = DateTime.utc(
-      now.toUtc().year,
-      now.toUtc().month,
-      now.toUtc().day,
-    );
-    return parseRingPacket(packet, today: today, now: now.toUtc()).measurements;
+    final local = now.toLocal();
+    final today = DateTime(local.year, local.month, local.day);
+    return parseRingPacket(packet, today: today, now: now).measurements;
   }
 }

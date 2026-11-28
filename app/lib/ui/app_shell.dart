@@ -6,6 +6,8 @@ import 'package:material_ui/material_ui.dart';
 import 'package:bylwapp/api/device_register.dart';
 import 'package:bylwapp/api/server_client.dart';
 import 'package:bylwapp/ble/ble_client.dart';
+import 'package:bylwapp/ble/ring/ring_actions.dart';
+import 'package:bylwapp/ble/ring/ring_sync.dart';
 import 'package:bylwapp/ble/bylw_log.dart';
 import 'package:bylwapp/ble/device_manager.dart';
 import 'package:bylwapp/ble/driver_registry.dart';
@@ -55,6 +57,7 @@ class _AppShellState extends State<AppShell> {
   List<LocalRecord> _records = const [];
   late final BleDeviceManager _devices = widget.devices ?? BleDeviceManager();
   StreamSubscription<BleLink>? _links;
+  StreamSubscription<RingSnapshot>? _ringSnapshots;
   Timer? _syncTimer;
   Timer? _syncSoon;
   bool _reconnected = false;
@@ -64,14 +67,26 @@ class _AppShellState extends State<AppShell> {
     super.initState();
     _devices.addListener(_onDevices);
     _links = widget.ble.links.listen(_devices.applyLink);
+    _ringSnapshots = widget.ble.ringSnapshots.listen((snap) {
+      final at = snap.historySyncedAt;
+      if (at != null) {
+        widget.settings.setLastRingHistoryAt(at);
+      }
+    });
     _reload();
     if (widget.autoRegister) {
+      _armRingHistory();
       _bootSync();
       _reconnectLastRing();
       _syncTimer = Timer.periodic(const Duration(seconds: 45), (_) {
         _bootSync();
       });
     }
+  }
+
+  Future<void> _armRingHistory() async {
+    final last = await widget.settings.getLastRingHistoryAt();
+    widget.ble.setRingHistoryDepth(ringHistoryDepth(last, DateTime.now()));
   }
 
   Future<void> _reconnectLastRing() async {
@@ -165,6 +180,7 @@ class _AppShellState extends State<AppShell> {
   void dispose() {
     _syncSoon?.cancel();
     _syncTimer?.cancel();
+    _ringSnapshots?.cancel();
     _links?.cancel();
     _devices.removeListener(_onDevices);
     if (widget.devices == null) {

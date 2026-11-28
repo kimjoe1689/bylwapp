@@ -59,6 +59,25 @@ class CanonicalEvent {
   String get payloadHash =>
       sha256.convert(utf8.encode(canonicalJson)).toString();
 
+  CanonicalEvent withClock(DateTime instant) {
+    final utc = instant.toUtc();
+    return CanonicalEvent(
+      eventId: eventId,
+      deviceId: deviceId,
+      sessionId: sessionId,
+      sensorAddress: sensorAddress,
+      sensorKind: sensorKind,
+      sensorModel: sensorModel,
+      measurementType: measurementType,
+      unit: unit,
+      monotonicUs: utc.microsecondsSinceEpoch,
+      clockState: clockState,
+      operatingState: operatingState,
+      values: values,
+      wallTimeUtc: zulu(utc),
+    );
+  }
+
   CanonicalEvent rebindDevice(String deviceId) {
     return CanonicalEvent(
       eventId: eventId,

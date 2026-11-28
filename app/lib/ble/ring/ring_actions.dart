@@ -4,30 +4,45 @@ class RingSnapshot {
     this.charging = false,
     this.historySyncedAt,
     this.measuring = false,
+    this.temperatureC,
+    this.temperatureChecked = false,
   });
 
   final int? batteryPercent;
   final bool charging;
   final DateTime? historySyncedAt;
   final bool measuring;
+  final double? temperatureC;
+  final bool temperatureChecked;
 
   RingSnapshot copyWith({
     int? batteryPercent,
     bool? charging,
     DateTime? historySyncedAt,
     bool? measuring,
+    double? temperatureC,
+    bool? temperatureChecked,
   }) {
     return RingSnapshot(
       batteryPercent: batteryPercent ?? this.batteryPercent,
       charging: charging ?? this.charging,
       historySyncedAt: historySyncedAt ?? this.historySyncedAt,
       measuring: measuring ?? this.measuring,
+      temperatureC: temperatureC ?? this.temperatureC,
+      temperatureChecked: temperatureChecked ?? this.temperatureChecked,
     );
   }
 }
 
 class RingNotice {
-  const RingNotice({required this.at, required this.hex, required this.label});
+  const RingNotice({
+    required this.at,
+    required this.hex,
+    required this.label,
+    this.count = 1,
+  });
+
+  final int count;
 
   final DateTime at;
   final String hex;

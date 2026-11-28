@@ -19,6 +19,14 @@ abstract class SettingsStore {
   Future<void> setLastRing({required String name, required String address});
 
   Future<({String name, String address})?> getLastRing();
+
+  Future<DateTime?> getLastRingHistoryAt();
+
+  Future<void> setLastRingHistoryAt(DateTime time);
+
+  Future<bool> getRingClockCorrected();
+
+  Future<void> setRingClockCorrected();
 }
 
 class MemorySettingsStore implements SettingsStore {
@@ -33,6 +41,8 @@ class MemorySettingsStore implements SettingsStore {
   String collectorId;
   String lastRingName = '';
   String lastRingAddress = '';
+  DateTime? lastRingHistoryAt;
+  bool ringClockCorrected = false;
 
   @override
   Future<String> getServerBaseUrl() async => url;
@@ -71,6 +81,22 @@ class MemorySettingsStore implements SettingsStore {
     if (lastRingAddress.isEmpty) return null;
     return (name: lastRingName, address: lastRingAddress);
   }
+
+  @override
+  Future<DateTime?> getLastRingHistoryAt() async => lastRingHistoryAt;
+
+  @override
+  Future<void> setLastRingHistoryAt(DateTime time) async {
+    lastRingHistoryAt = time.toUtc();
+  }
+
+  @override
+  Future<bool> getRingClockCorrected() async => ringClockCorrected;
+
+  @override
+  Future<void> setRingClockCorrected() async {
+    ringClockCorrected = true;
+  }
 }
 
 class SharedPreferencesSettingsStore implements SettingsStore {
@@ -81,6 +107,8 @@ class SharedPreferencesSettingsStore implements SettingsStore {
   static const collectorKey = 'collector_id';
   static const ringNameKey = 'last_ring_name';
   static const ringAddressKey = 'last_ring_address';
+  static const ringHistoryKey = 'last_ring_history_at';
+  static const ringClockKey = 'ring_clock_corrected';
   final SharedPreferences _prefs;
 
   static Future<SharedPreferencesSettingsStore> open() async {
@@ -129,6 +157,27 @@ class SharedPreferencesSettingsStore implements SettingsStore {
     final address = _prefs.getString(ringAddressKey) ?? '';
     if (address.isEmpty) return null;
     return (name: _prefs.getString(ringNameKey) ?? address, address: address);
+  }
+
+  @override
+  Future<DateTime?> getLastRingHistoryAt() async {
+    final raw = _prefs.getString(ringHistoryKey);
+    if (raw == null || raw.isEmpty) return null;
+    return DateTime.tryParse(raw)?.toUtc();
+  }
+
+  @override
+  Future<void> setLastRingHistoryAt(DateTime time) async {
+    await _prefs.setString(ringHistoryKey, time.toUtc().toIso8601String());
+  }
+
+  @override
+  Future<bool> getRingClockCorrected() async =>
+      _prefs.getBool(ringClockKey) ?? false;
+
+  @override
+  Future<void> setRingClockCorrected() async {
+    await _prefs.setBool(ringClockKey, true);
   }
 }
 
