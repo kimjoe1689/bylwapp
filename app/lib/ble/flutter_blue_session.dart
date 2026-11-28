@@ -1,0 +1,1212 @@
+import 'dart:async';
+import 'dart:io';
+
+import 'package:flutter/foundation.dart';
+import 'package:flutter_blue_plus/flutter_blue_plus.dart';
+
+import 'package:bylwapp/ble/ble_client.dart';
+import 'package:bylwapp/ble/blood_pressure/bp_driver.dart';
+import 'package:bylwapp/ble/bylw_log.dart';
+import 'package:bylwapp/ble/bytes.dart';
+import 'package:bylwapp/ble/device_driver.dart';
+import 'package:bylwapp/ble/driver_registry.dart';
+import 'package:bylwapp/ble/ring/ring_actions.dart';
+import 'package:bylwapp/ble/ring/ring_driver.dart';
+import 'package:bylwapp/ble/ring/ring_parser.dart';
+import 'package:bylwapp/ble/ring/ring_packet.dart';
+import 'package:bylwapp/ble/ring/ring_sync.dart';
+import 'package:bylwapp/ble/ring/ring_trace.dart';
+import 'package:bylwapp/ble/uuids.dart';
+import 'package:bylwapp/models/health_record.dart';
+
+/// flutter_blue_plus adapter.
+///
+/// TODO(hardware): connection stability, indication versus notification,
+/// MTU, bonding, and the YE680B / H303 / R09 / R05 quirks below are not
+/// verified. There is no radio in this environment. Parsers are covered by
+/// unit tests with sample packets.
+class FlutterBlueSession implements BleClient {
+  final StreamController<List<BleScanHit>> _hits =
+      StreamController<List<BleScanHit>>.broadcast();
+  final StreamController<BleTrace> _traces =
+      StreamController<BleTrace>.broadcast();
+  final StreamController<BleLink> _links =
+      StreamController<BleLink>.broadcast();
+
+  @override
+  Stream<BleTrace> get traces => _traces.stream;
+
+  @override
+  Stream<BleLink> get links => _links.stream;
+  StreamSubscription<List<ScanResult>>? _scanSub;
+  StreamSubscription<BluetoothConnectionState>? _connSub;
+  StreamSubscription<OnCharacteristicReceivedEvent>? _globalSub;
+  final List<StreamSubscription<List<int>>> _valueSubs = [];
+  final Set<String> _watched = {};
+  List<BluetoothService> _services = [];
+  BluetoothDevice? _device;
+  HealthDeviceDriver? _driver;
+  String _connectedName = '';
+  String _connectedAddress = '';
+  bool _wantConnected = false;
+  bool _arming = false;
+  bool _armAgain = false;
+  String _lastRxKey = '';
+  int _lastRxUs = 0;
+  Timer? _ringResync;
+  Timer? _ringKeepalive;
+  bool _ringBusy = false;
+  int _ringHistoryDays = 1;
+  final StreamController<RingNotice> _ringNotices =
+      StreamController<RingNotice>.broadcast();
+  final StreamController<RingSnapshot> _ringSnapshots =
+      StreamController<RingSnapshot>.broadcast();
+  final StreamController<String> _gestureRx =
+      StreamController<String>.broadcast();
+  final Map<RingSyncPhase, Timer> _incremental = {};
+  bool _gestureWatch = false;
+  bool _exploreEvents = true;
+  bool _hrContinuous = false;
+  bool _pageOpen = false;
+  bool _liveRequested = false;
+  bool _gestureMark = false;
+  bool _hrRunning = false;
+  DateTime? _hrStartedAt;
+  DateTime? _lastHrSample;
+  DateTime? _burstUntil;
+  DateTime? _nextBurst;
+  Timer? _hrWatch;
+  final RingTxWindow _txWindow = RingTxWindow();
+  void Function(RingPacketLog log)? _onRingPacket;
+  RingSnapshot _ringSnapshot = const RingSnapshot();
+
+  @override
+  Stream<RingNotice> get ringNotices => _ringNotices.stream;
+
+  @override
+  RingSnapshot get ringSnapshot => _ringSnapshot;
+
+  @override
+  Stream<RingSnapshot> get ringSnapshots => _ringSnapshots.stream;
+
+  @override
+  Stream<String> get gestureRx => _gestureRx.stream;
+
+  @override
+  void setRingHistoryDepth(int days) {
+    _ringHistoryDays = days < 0 ? 0 : (days > 7 ? 7 : days);
+  }
+
+  @override
+  void setExploreEvents(bool enabled) {
+    _exploreEvents = enabled;
+  }
+
+  @override
+  void setHeartSchedule(String mode) {
+    _hrContinuous = mode == 'continuous';
+  }
+
+  @override
+  void setRingPageOpen(bool open) {
+    _pageOpen = open;
+    if (open) {
+      _startHr();
+    } else if (!_hrContinuous && !_liveRequested) {
+      _stopHr();
+      _burstUntil = null;
+      _nextBurst = DateTime.now().add(const Duration(minutes: 5));
+    }
+  }
+
+  @override
+  void setGestureMark(bool enabled) {
+    final was = _gestureMark;
+    _gestureMark = enabled;
+    if (!_wantConnected || _driver is! YawellRingDriver) return;
+    if (enabled && !was) {
+      unawaited(_armGesture());
+    } else if (!enabled && was) {
+      unawaited(_writeRing(RingPacket.gesture(0x06), 'gesture-off'));
+    }
+  }
+
+  @override
+  set onRingPacket(void Function(RingPacketLog log)? listener) {
+    _onRingPacket = listener;
+  }
+
+  Future<void> _armGesture() async {
+    await _writeRing(RingPacket.gesture(0x04), 'gesture-on');
+    await _writeRing(RingPacket.gesture(0x05), 'gesture-wait');
+  }
+
+  void _publishRing(RingSnapshot next, {RingNotice? notice}) {
+    _ringSnapshot = next;
+    if (!_ringSnapshots.isClosed) _ringSnapshots.add(next);
+    if (notice != null && !_ringNotices.isClosed) _ringNotices.add(notice);
+  }
+
+  void Function(HealthMeasurement measurement)? _onMeasurement;
+  final BigDataAssembler _assembler = BigDataAssembler();
+  final List<List<int>> _inbox = [];
+  Completer<List<int>>? _waiter;
+  bool _syncing = false;
+
+  @override
+  Stream<List<BleScanHit>> get scanHits => _hits.stream;
+
+  @override
+  Future<void> startScan() async {
+    // A combined service filter would hide devices that advertise only one profile.
+    await FlutterBluePlus.startScan(timeout: const Duration(seconds: 8));
+    await _scanSub?.cancel();
+    _scanSub = FlutterBluePlus.scanResults.listen((results) {
+      final hits = <BleScanHit>[];
+      for (final result in results) {
+        final name = result.advertisementData.advName;
+        final services = result.advertisementData.serviceUuids
+            .map((guid) => guid.str128)
+            .toList();
+        final driver = matchDriver(
+          advertisedName: name,
+          serviceUuids: services,
+        );
+        hits.add(
+          BleScanHit(
+            name: name.isEmpty ? '未命名设备' : name,
+            address: result.device.remoteId.str,
+            rssi: result.rssi,
+            driverId: driver?.id,
+          ),
+        );
+      }
+      if (!_hits.isClosed) {
+        _hits.add(hits);
+      }
+    });
+  }
+
+  @override
+  Future<void> stopScan() async {
+    await FlutterBluePlus.stopScan();
+    await _scanSub?.cancel();
+    _scanSub = null;
+  }
+
+  @override
+  Future<void> connect({
+    required BleScanHit hit,
+    required void Function(HealthMeasurement measurement) onMeasurement,
+  }) async {
+    final driver = driverById(hit.driverId);
+    if (driver == null) {
+      throw StateError('无法识别这台设备的协议');
+    }
+    final already =
+        _wantConnected &&
+        _device != null &&
+        _connectedAddress.toUpperCase() == hit.address.toUpperCase() &&
+        _device!.isConnected;
+    if (already) {
+      bylwLog('already connected ${hit.address}, skip reconnect');
+      _onMeasurement = onMeasurement;
+      _driver = driver;
+      _emit(
+        BleLinkPhase.connected,
+        address: hit.address,
+        name: hit.name,
+        driverId: driver.id,
+      );
+      return;
+    }
+    await disconnect();
+    _wantConnected = true;
+    _driver = driver;
+    _onMeasurement = onMeasurement;
+    _connectedName = hit.name;
+    _connectedAddress = hit.address;
+    _assembler.reset();
+    _emit(
+      BleLinkPhase.connecting,
+      address: hit.address,
+      name: hit.name,
+      driverId: driver.id,
+    );
+    final device = BluetoothDevice.fromId(hit.address);
+    _device = device;
+    await _connSub?.cancel();
+    _connSub = device.connectionState.listen((state) {
+      if (!identical(_device, device)) {
+        return;
+      }
+      bylwLog('connectionState ${hit.address} $state');
+      if (state == BluetoothConnectionState.connected) {
+        _emit(
+          BleLinkPhase.connected,
+          address: hit.address,
+          name: hit.name,
+          driverId: driver.id,
+        );
+        _arm();
+      } else if (state == BluetoothConnectionState.disconnected &&
+          _wantConnected) {
+        _emit(
+          BleLinkPhase.disconnected,
+          address: hit.address,
+          name: hit.name,
+          driverId: driver.id,
+        );
+      }
+    });
+    // Personal / educational use of flutter_blue_plus 2.x. Commercial apps need License.commercial.
+    await device.connect(
+      license: License.nonprofit,
+      timeout: const Duration(seconds: 20),
+    );
+    await _arm();
+  }
+
+  @override
+  Future<int> syncConnected({required bool temperatureLoggingEnabled}) async {
+    final device = _device;
+    if (device == null) {
+      throw StateError('还没有连接设备');
+    }
+    final driver = _driver;
+    if (driver is BloodPressureDriver) {
+      await _writeClock(driver);
+      return 0;
+    }
+    if (driver is! YawellRingDriver) {
+      // The standard heart-rate profile has no history channel.
+      return 0;
+    }
+    return _syncRing(
+      true,
+      temperatureLoggingEnabled: temperatureLoggingEnabled,
+      maxDaysAgo: _ringHistoryDays,
+    );
+  }
+
+  @override
+  Future<void> disconnect() async {
+    final address = _connectedAddress;
+    final name = _connectedName;
+    final driverId = _driver?.id;
+    _wantConnected = false;
+    _gestureWatch = false;
+    for (final timer in _incremental.values) {
+      timer.cancel();
+    }
+    _incremental.clear();
+    _ringResync?.cancel();
+    _ringKeepalive?.cancel();
+    _hrWatch?.cancel();
+    _ringResync = null;
+    _ringKeepalive = null;
+    _hrWatch = null;
+    _hrRunning = false;
+    await _cancelChrSubs();
+    await _connSub?.cancel();
+    _connSub = null;
+    final device = _device;
+    _device = null;
+    _services = [];
+    _watched.clear();
+    _driver = null;
+    _onMeasurement = null;
+    _connectedAddress = '';
+    if (device != null) {
+      try {
+        await device.disconnect();
+      } catch (error) {
+        bylwLog('disconnect $error');
+      }
+    }
+    if (address.isNotEmpty) {
+      _emit(
+        BleLinkPhase.disconnected,
+        address: address,
+        name: name,
+        driverId: driverId,
+      );
+    }
+  }
+
+  Future<void> _arm() async {
+    if (_arming) {
+      _armAgain = true;
+      return;
+    }
+    _arming = true;
+    try {
+      final device = _device;
+      final driver = _driver;
+      if (device == null || driver == null || !_wantConnected) {
+        return;
+      }
+      bylwLog('discover ${device.remoteId.str}');
+      final services = await device.discoverServices();
+      if (!_wantConnected || !identical(_device, device)) {
+        return;
+      }
+      _services = services;
+      _watched
+        ..clear()
+        ..addAll(
+          driver.watches.map(
+            (watch) => normalizeUuid(watch.characteristicUuid),
+          ),
+        );
+      _ensureGlobalRx();
+      await _cancelChrSubs();
+      for (final watch in driver.watches) {
+        final characteristic = _find(
+          watch.serviceUuid,
+          watch.characteristicUuid,
+        );
+        if (characteristic == null) {
+          bylwLog('missing ${watch.characteristicUuid}');
+          continue;
+        }
+        final sub = characteristic.onValueReceived.listen(
+          (value) => _handleRx(watch.characteristicUuid, value),
+          onError: (Object error) => bylwLog('chr stream $error'),
+        );
+        _valueSubs.add(sub);
+        final forceIndications =
+            watch.indicate && !kIsWeb && Platform.isAndroid;
+        bylwLog(
+          'setNotify ${characteristic.uuid.str128} indicate=$forceIndications instance=${characteristic.instanceId}',
+        );
+        await characteristic.setNotifyValue(
+          true,
+          forceIndications: forceIndications,
+        );
+        bylwLog('setNotify ok ${characteristic.uuid.str128}');
+      }
+    } catch (error) {
+      bylwLog('arm failed $error');
+    } finally {
+      _arming = false;
+      final again = _armAgain;
+      _armAgain = false;
+      if (again) {
+        await _arm();
+      } else if (_driver is YawellRingDriver && _wantConnected) {
+        unawaited(_ringBringUp());
+      }
+    }
+  }
+
+  Future<void> _ringBringUp() async {
+    if (_ringBusy || _driver is! YawellRingDriver || !_wantConnected) {
+      return;
+    }
+    _ringBusy = true;
+    _ringResync?.cancel();
+    _ringKeepalive?.cancel();
+    _hrWatch?.cancel();
+    try {
+      await _readDeviceInfo();
+      await _ringStage('set-time', () async {
+        await _writeRing(RingPacket.encodeDateTime(DateTime.now()), 'set-time');
+        final reply = await _awaitCommand(RingPacket.cmdSetDateTime);
+        if (reply != null) _noteControlPacket(reply);
+      });
+      await _ringStage('battery', () async {
+        await _writeRing(RingPacket.batteryRequest(), 'battery');
+        final packet = await _awaitCommand(RingPacket.cmdBattery);
+        final battery = packet == null ? null : parseBattery(packet);
+        if (battery != null) {
+          bylwLog(
+            'stage battery percent=${battery.percent} charging=${battery.charging}',
+          );
+          _publishRing(
+            _ringSnapshot.copyWith(
+              batteryPercent: battery.percent,
+              charging: battery.charging,
+            ),
+            notice: RingNotice(
+              at: DateTime.now(),
+              hex: '',
+              label: '电量 ${battery.percent}%',
+            ),
+          );
+        }
+      });
+      await _ringStage('temperature-live', () async {
+        final bytes = RingPacket.startRealtimeTemperature();
+        final hex = bytes
+            .map((byte) => byte.toRadixString(16).padLeft(2, '0'))
+            .join(' ');
+        bylwLog('tx temperature-live $hex');
+        await _writeRing(bytes, 'temperature-live');
+        final packet = await _awaitCommand(
+          RingPacket.cmdManualHeartRate,
+          subtype: RingPacket.manualTemperature,
+        );
+        if (packet == null) {
+          bylwLog('rx temperature-live timeout');
+          _publishRing(_ringSnapshot.copyWith(temperatureChecked: true));
+          return;
+        }
+        final rx = packet
+            .map((byte) => byte.toRadixString(16).padLeft(2, '0'))
+            .join(' ');
+        bylwLog('rx temperature-live $rx');
+        final parsed = parseRingPacket(
+          packet,
+          today: DateTime.now(),
+          now: DateTime.now(),
+        );
+        final celsius = parsed.measurements.isEmpty
+            ? null
+            : parsed.measurements.single.values['celsius'];
+        if (celsius is num) {
+          _publishRing(
+            _ringSnapshot.copyWith(
+              temperatureC: celsius.toDouble(),
+              temperatureChecked: true,
+            ),
+            notice: RingNotice(
+              at: DateTime.now(),
+              hex: rx,
+              label: '体温 ${celsius.toStringAsFixed(1)}',
+            ),
+          );
+          for (final measurement in parsed.measurements) {
+            await _deliver(measurement);
+          }
+        } else {
+          _publishRing(_ringSnapshot.copyWith(temperatureChecked: true));
+        }
+      });
+      if (_gestureMark) {
+        await _ringStage('gesture-mark', _armGesture);
+      }
+      await _ringStage('history', () async {
+        final saved = await _syncRing(
+          true,
+          temperatureLoggingEnabled: false,
+          maxDaysAgo: _ringHistoryDays,
+        );
+        _ringHistoryDays = 0;
+        bylwLog('stage history saved=$saved');
+        _publishRing(
+          _ringSnapshot.copyWith(historySyncedAt: DateTime.now()),
+          notice: RingNotice(at: DateTime.now(), hex: '', label: '历史已同步'),
+        );
+      });
+    } finally {
+      _ringBusy = false;
+    }
+    if (!_wantConnected || _driver is! YawellRingDriver) {
+      return;
+    }
+    _nextBurst ??= DateTime.now();
+    _hrWatch = Timer.periodic(const Duration(seconds: 1), (_) => _tickHeart());
+    _ringKeepalive = Timer.periodic(const Duration(seconds: 15), (_) {
+      if (!_wantConnected || _syncing || _ringBusy || !_hrRunning) {
+        return;
+      }
+      unawaited(
+        _writeRing(RingPacket.continueRealtimeHeartRate(), 'hr-continue'),
+      );
+    });
+    _ringResync = Timer.periodic(const Duration(minutes: 15), (_) {
+      if (_wantConnected && !_ringBusy && !_syncing) {
+        unawaited(_ringHistoryOnly());
+      }
+    });
+  }
+
+  Future<void> _ringHistoryOnly() async {
+    if (_ringBusy || _driver is! YawellRingDriver || !_wantConnected) return;
+    _ringBusy = true;
+    try {
+      final saved = await _syncRing(
+        true,
+        temperatureLoggingEnabled: true,
+        maxDaysAgo: _ringHistoryDays,
+      );
+      bylwLog('stage resync saved=$saved');
+      _publishRing(_ringSnapshot.copyWith(historySyncedAt: DateTime.now()));
+    } finally {
+      _ringBusy = false;
+    }
+  }
+
+  Future<void> _ringStage(String name, Future<void> Function() body) async {
+    bylwLog('stage $name start');
+    try {
+      await body();
+      bylwLog('stage $name end');
+    } catch (error) {
+      bylwLog('stage $name skip $error');
+    }
+  }
+
+  @override
+  Future<RingActionResult> performRingAction(RingAction action) async {
+    if (_driver is! YawellRingDriver || !_wantConnected) {
+      return RingActionResult.unsupported;
+    }
+    try {
+      switch (action.id) {
+        case 'find':
+          await _writeRing(RingPacket.findRing(), 'find');
+          return RingActionResult.ok;
+        case 'time':
+          await _writeRing(
+            RingPacket.encodeDateTime(DateTime.now()),
+            'set-time',
+          );
+          return RingActionResult.ok;
+        case 'history':
+          if (_ringBusy) {
+            return const RingActionResult(supported: true, message: '正在同步');
+          }
+          unawaited(_ringBringUp());
+          return const RingActionResult(supported: true, message: '已开始同步');
+        case 'battery':
+          await _writeRing(RingPacket.batteryRequest(), 'battery');
+          final packet = await _awaitCommand(RingPacket.cmdBattery);
+          final battery = packet == null ? null : parseBattery(packet);
+          if (battery == null) return RingActionResult.unsupported;
+          _publishRing(
+            _ringSnapshot.copyWith(
+              batteryPercent: battery.percent,
+              charging: battery.charging,
+            ),
+            notice: RingNotice(
+              at: DateTime.now(),
+              hex: '',
+              label: '电量 ${battery.percent}%',
+            ),
+          );
+          return RingActionResult(
+            supported: true,
+            message: '电量 ${battery.percent}%',
+            batteryPercent: battery.percent,
+            charging: battery.charging,
+          );
+        case 'power':
+          await _writeRing(RingPacket.powerOff(), 'power-off');
+          return RingActionResult.ok;
+        case 'factory':
+          await _writeRing(RingPacket.factoryReset(), 'factory-reset');
+          return RingActionResult.ok;
+        case 'gesture-on':
+          await _writeRing(RingPacket.gesture(0x04), 'gesture-on');
+          return RingActionResult.ok;
+        case 'gesture-wait':
+          _gestureWatch = true;
+          await _writeRing(RingPacket.gesture(0x05), 'gesture-wait');
+          return RingActionResult.ok;
+        case 'gesture-off':
+          await _writeRing(RingPacket.gesture(0x06), 'gesture-off');
+          _gestureWatch = false;
+          return const RingActionResult(
+            supported: true,
+            message: '已关闭手势（02 06）',
+          );
+        case 'live-start':
+          _liveRequested = true;
+          _startHr();
+          return RingActionResult.ok;
+        case 'live-stop':
+          _liveRequested = false;
+          if (!_pageOpen && !_hrContinuous) _stopHr();
+          return RingActionResult.ok;
+        case 'auto-read':
+          return await _auto(action, write: false);
+        case 'auto-write':
+          return await _auto(action, write: true);
+        default:
+          return RingActionResult.unsupported;
+      }
+    } catch (error) {
+      bylwLog('ring action ${action.id} skip $error');
+      return RingActionResult.unsupported;
+    }
+  }
+
+  Future<RingActionResult> _auto(
+    RingAction action, {
+    required bool write,
+  }) async {
+    final command = switch (action.metric) {
+      'heart_rate' => RingPacket.cmdAutoHeartRate,
+      'spo2' => RingPacket.cmdAutoSpo2,
+      'stress' => RingPacket.cmdAutoStress,
+      _ => null,
+    };
+    if (command == null) return RingActionResult.unsupported;
+    if (write) {
+      await _writeRing(
+        RingPacket.writeAuto(
+          command,
+          enabled: action.enabled ?? false,
+          minutes: action.minutes ?? 30,
+        ),
+        'auto-${action.metric}',
+      );
+      final ack = await _awaitCommand(command);
+      if (ack == null) return RingActionResult.unsupported;
+      return const RingActionResult(supported: true, message: '已设置');
+    }
+    await _writeRing(
+      RingPacket.readAuto(command),
+      'read-auto-${action.metric}',
+    );
+    final packet = await _awaitCommand(command);
+    if (packet == null || packet.length < 3) {
+      return RingActionResult.unsupported;
+    }
+    return RingActionResult(
+      supported: true,
+      enabled: (packet[1] & 0xff) != 0,
+      minutes: packet[2] & 0xff,
+      message: '已读取',
+    );
+  }
+
+  Future<void> _writeRing(
+    List<int> bytes,
+    String label, {
+    String serviceUuid = ringServiceV1Uuid,
+    String characteristicUuid = ringWriteUuid,
+  }) async {
+    final characteristic = _find(serviceUuid, characteristicUuid);
+    final hex = bytes
+        .map((byte) => byte.toRadixString(16).padLeft(2, '0'))
+        .join(' ');
+    if (characteristic == null) {
+      bylwLog('tx $label missing $characteristicUuid');
+      return;
+    }
+    bylwLog('tx $label $hex');
+    _trace('tx', characteristicUuid, bytes);
+    try {
+      await characteristic.write(bytes, withoutResponse: bytes.length <= 20);
+    } catch (error) {
+      bylwLog('tx $label without-response failed $error');
+      await characteristic.write(bytes, withoutResponse: false);
+    }
+  }
+
+  Future<List<int>?> _awaitCommand(int command, {int? subtype}) async {
+    _syncing = true;
+    _inbox.clear();
+    try {
+      final deadline = DateTime.now().add(const Duration(seconds: 8));
+      while (true) {
+        final remaining = deadline.difference(DateTime.now());
+        if (remaining.isNegative) {
+          return null;
+        }
+        final packet = await _nextPacket(remaining);
+        if (packet.isEmpty || (packet[0] & 0xff) != command) {
+          _noteControlPacket(packet);
+          continue;
+        }
+        if (subtype != null &&
+            (packet.length < 2 || (packet[1] & 0xff) != subtype)) {
+          continue;
+        }
+        return packet;
+      }
+    } on TimeoutException {
+      return null;
+    } finally {
+      _syncing = false;
+    }
+  }
+
+  void _ensureGlobalRx() {
+    _globalSub ??= FlutterBluePlus.events.onCharacteristicReceived.listen((
+      event,
+    ) {
+      if (_connectedAddress.isEmpty) {
+        return;
+      }
+      if (event.device.remoteId.str.toUpperCase() !=
+          _connectedAddress.toUpperCase()) {
+        return;
+      }
+      final uuid = event.characteristic.uuid.str128;
+      if (!_watched.contains(uuid)) {
+        return;
+      }
+      _handleRx(uuid, event.value);
+    }, onError: (Object error) => bylwLog('event stream $error'));
+  }
+
+  Future<void> _cancelChrSubs() async {
+    for (final sub in _valueSubs) {
+      await sub.cancel();
+    }
+    _valueSubs.clear();
+  }
+
+  void _emit(
+    BleLinkPhase phase, {
+    String? address,
+    String? name,
+    String? driverId,
+  }) {
+    if (_links.isClosed) {
+      return;
+    }
+    _links.add(
+      BleLink(phase: phase, address: address, name: name, driverId: driverId),
+    );
+  }
+
+  void _handleRx(String characteristicUuid, List<int> value) {
+    final key = '$characteristicUuid:${value.join(',')}';
+    final now = DateTime.now().microsecondsSinceEpoch;
+    if (key == _lastRxKey && now - _lastRxUs < 150000) {
+      return;
+    }
+    _lastRxKey = key;
+    _lastRxUs = now;
+    final hex = value
+        .map((byte) => byte.toRadixString(16).padLeft(2, '0'))
+        .join(' ');
+    bylwLog('rx $characteristicUuid $hex');
+    _trace('rx', characteristicUuid, value);
+    if (value.length >= 2 &&
+        (value[0] & 0xff) == RingPacket.cmdManualHeartRate &&
+        (value[1] & 0xff) == RingPacket.manualHeartRate) {
+      _lastHrSample = DateTime.now();
+    }
+    if (_gestureMark &&
+        value.length >= 2 &&
+        (value[0] & 0xff) == 0x02 &&
+        (value[1] & 0xff) == 0x02) {
+      unawaited(
+        _deliver(
+          HealthMeasurement(
+            type: 'gesture',
+            unit: 'event',
+            recordedAt: DateTime.now().toUtc(),
+            values: {'cmd': 2, 'sub': 2, 'hex': hex},
+          ),
+        ),
+      );
+    }
+    if (_gestureWatch && !_gestureRx.isClosed) {
+      final label = ringNoticeLabel(value);
+      _gestureRx.add(label == null ? hex : '$label  $hex');
+    }
+    unawaited(
+      _onValue(characteristicUuid, value).catchError((Object error) {
+        bylwLog('parse failed $error raw=$hex');
+      }),
+    );
+  }
+
+  void _trace(String direction, String characteristicUuid, List<int> bytes) {
+    final at = DateTime.now().toUtc();
+    if (!_traces.isClosed) {
+      _traces.add(
+        BleTrace(
+          at: at,
+          direction: direction,
+          characteristicUuid: characteristicUuid,
+          bytes: List<int>.from(bytes),
+        ),
+      );
+    }
+    if (!_exploreEvents || _onRingPacket == null) return;
+    final cmd = bytes.isEmpty ? null : bytes[0] & 0xff;
+    final sub = bytes.length < 2 ? null : bytes[1] & 0xff;
+    if (direction == 'tx' && cmd != null) {
+      _txWindow.sent(cmd, at);
+    }
+    final label = direction == 'rx'
+        ? describeAnyRingPacket(bytes)
+        : (cmd == null ? 'tx' : 'tx ${describeAnyRingPacket(bytes)}');
+    final solicited =
+        direction == 'rx' && cmd != null && _txWindow.replySolicited(cmd, at);
+    _onRingPacket!(
+      RingPacketLog(
+        at: at,
+        direction: direction,
+        characteristic: characteristicUuid,
+        hex: bytes
+            .map((byte) => byte.toRadixString(16).padLeft(2, '0'))
+            .join(' '),
+        label: label,
+        solicited: solicited,
+        cmd: cmd,
+        sub: sub,
+      ),
+    );
+  }
+
+  void _tickHeart() {
+    if (!_wantConnected || _driver is! YawellRingDriver) return;
+    if (_syncing || _ringBusy) return;
+    final now = DateTime.now();
+    if (_hrContinuous || _pageOpen || _liveRequested) {
+      _ensureHr(now);
+      return;
+    }
+    if (_burstUntil != null) {
+      if (now.isBefore(_burstUntil!)) {
+        _ensureHr(now);
+      } else {
+        _stopHr();
+        _burstUntil = null;
+        _nextBurst = now.add(const Duration(minutes: 5));
+      }
+      return;
+    }
+    if (_nextBurst == null || !now.isBefore(_nextBurst!)) {
+      _burstUntil = now.add(const Duration(seconds: 30));
+      _startHr();
+    }
+  }
+
+  void _ensureHr(DateTime now) {
+    final stale =
+        _lastHrSample == null ||
+        now.difference(_lastHrSample!) >= const Duration(seconds: 3);
+    final aged =
+        _hrStartedAt == null ||
+        now.difference(_hrStartedAt!) >= const Duration(seconds: 28);
+    if (!_hrRunning || stale || aged) _startHr();
+  }
+
+  void _startHr() {
+    _hrRunning = true;
+    _hrStartedAt = DateTime.now();
+    _lastHrSample = DateTime.now();
+    unawaited(_writeRing(RingPacket.startRealtimeHeartRate(), 'realtime-hr'));
+    _publishRing(_ringSnapshot.copyWith(measuring: true));
+  }
+
+  void _stopHr() {
+    if (!_hrRunning) return;
+    _hrRunning = false;
+    unawaited(_writeRing(RingPacket.stopRealtimeHeartRate(), 'stop-hr'));
+    _publishRing(_ringSnapshot.copyWith(measuring: false));
+  }
+
+  Future<void> _onValue(String characteristicUuid, List<int> value) async {
+    List<int>? packet = value;
+    if (normalizeUuid(characteristicUuid) == ringNotifyV2Uuid) {
+      packet = _assembler.add(value);
+      if (packet == null) {
+        return;
+      }
+    }
+    if (_syncing) {
+      _enqueue(packet);
+      return;
+    }
+    final driver = _driver;
+    if (driver == null) {
+      bylwLog('rx dropped, no active driver');
+      return;
+    }
+    final measurements = driver.parse(
+      characteristicUuid,
+      packet,
+      now: DateTime.now().toUtc(),
+    );
+    if (driver is YawellRingDriver) {
+      _noteControlPacket(packet);
+    }
+    for (final measurement in measurements) {
+      await _deliver(measurement);
+    }
+  }
+
+  void _rememberInfo(RingDeviceInfo info) {
+    _publishRing(_ringSnapshot.copyWith(info: info));
+  }
+
+  void _addNotice(String label, String hex, {bool developerOnly = false}) {
+    if (_ringNotices.isClosed || label.isEmpty) return;
+    _ringNotices.add(
+      RingNotice(
+        at: DateTime.now(),
+        hex: hex,
+        label: label,
+        developerOnly: developerOnly,
+      ),
+    );
+  }
+
+  String _hex(List<int> packet) =>
+      packet.map((byte) => byte.toRadixString(16).padLeft(2, '0')).join(' ');
+
+  void _noteControlPacket(List<int> packet) {
+    if (packet.isEmpty) return;
+    final command = packet[0] & 0xff;
+    final hex = _hex(packet);
+    final length = parsePackageLength(packet);
+    if (length != null) {
+      _rememberInfo(RingDeviceInfo(maxPacket: length));
+      _addNotice('最大包长 $length 字节', hex, developerOnly: true);
+      return;
+    }
+    if (command == RingPacket.cmdSetDateTime &&
+        packet.length >= 15 &&
+        (packet[1] & 0xff) <= 1) {
+      final caps = parseSetTimeReply(packet);
+      if (caps != null) _rememberInfo(caps);
+      return;
+    }
+    if (command == RingPacket.cmdNotification && packet.length > 1) {
+      final subtype = packet[1] & 0xff;
+      if (subtype == 0x0c && packet.length > 2) {
+        _publishRing(
+          _ringSnapshot.copyWith(
+            batteryPercent: packet[2] & 0xff,
+            charging: packet.length > 3 && (packet[3] & 0xff) == 1,
+          ),
+        );
+      }
+      final phase = switch (subtype) {
+        0x01 => RingSyncPhase.heartRate,
+        0x03 => RingSyncPhase.spo2,
+        0x04 => RingSyncPhase.activity,
+        0x05 || 0x27 => RingSyncPhase.temperature,
+        _ => null,
+      };
+      if (phase != null) _scheduleIncremental(phase);
+    }
+    final label = ringNoticeLabel(packet);
+    if (label == null) return;
+    final notable =
+        command == RingPacket.cmdNotification ||
+        command == 0x02 ||
+        command == RingPacket.cmdBattery ||
+        command == RingPacket.cmdFind;
+    _addNotice(label, hex, developerOnly: !notable);
+  }
+
+  void _scheduleIncremental(RingSyncPhase phase) {
+    _incremental[phase]?.cancel();
+    _incremental[phase] = Timer(const Duration(seconds: 2), () {
+      unawaited(_runIncremental(phase));
+    });
+  }
+
+  Future<void> _runIncremental(RingSyncPhase phase) async {
+    if (!_wantConnected || _driver is! YawellRingDriver) return;
+    if (_ringBusy || _syncing) {
+      _scheduleIncremental(phase);
+      return;
+    }
+    _ringBusy = true;
+    try {
+      bylwLog('stage incremental $phase');
+      final saved = await _syncRing(
+        true,
+        temperatureLoggingEnabled: phase != RingSyncPhase.temperature,
+        maxDaysAgo: 0,
+        onlyPhase: phase,
+      );
+      bylwLog('stage incremental $phase saved=$saved');
+    } finally {
+      _ringBusy = false;
+    }
+  }
+
+  Future<void> _readDeviceInfo() async {
+    final model = await _readDeviceString(modelNumberUuid);
+    final firmware = await _readDeviceString(firmwareRevisionUuid);
+    final hardware = await _readDeviceString(hardwareRevisionUuid);
+    if (model == null && firmware == null && hardware == null) {
+      bylwLog('dis missing');
+      return;
+    }
+    _rememberInfo(
+      RingDeviceInfo(model: model, firmware: firmware, hardware: hardware),
+    );
+  }
+
+  Future<String?> _readDeviceString(String characteristicUuid) async {
+    final characteristic = _find(deviceInfoServiceUuid, characteristicUuid);
+    if (characteristic == null) return null;
+    try {
+      final value = await characteristic.read();
+      final end = value.indexOf(0);
+      final slice = end < 0 ? value : value.sublist(0, end);
+      final text = String.fromCharCodes(
+        slice.where((byte) => byte >= 32 && byte < 127),
+      ).trim();
+      bylwLog('dis $characteristicUuid $text');
+      return text.isEmpty ? null : text;
+    } catch (error) {
+      bylwLog('dis $characteristicUuid failed $error');
+      return null;
+    }
+  }
+
+  Future<void> _deliver(HealthMeasurement measurement) async {
+    final callback = _onMeasurement;
+    if (callback == null) return;
+    await Future<void>.sync(() => callback(measurement));
+  }
+
+  Future<void> _writeClock(BloodPressureDriver driver) async {
+    final now = DateTime.now().toUtc();
+    for (final write in driver.timeSync(now)) {
+      final characteristic = _find(write.serviceUuid, write.characteristicUuid);
+      if (characteristic == null) {
+        continue;
+      }
+      _trace('tx', write.characteristicUuid, write.bytes);
+      await characteristic.write(write.bytes);
+      return;
+    }
+    throw StateError('这台血压计没有暴露 0x2A08 或 0x2A2B，无法对时');
+  }
+
+  Future<int> _syncRing(
+    bool temperatureCapable, {
+    required bool temperatureLoggingEnabled,
+    int maxDaysAgo = 1,
+    RingSyncPhase? onlyPhase,
+  }) async {
+    final cursor = RingSyncCursor(
+      now: DateTime.now(),
+      temperatureCapable: temperatureCapable,
+      temperatureLoggingEnabled: temperatureLoggingEnabled,
+      maxDaysAgo: maxDaysAgo,
+      onlyPhase: onlyPhase,
+    );
+    _syncing = true;
+    _inbox.clear();
+    var saved = 0;
+    try {
+      while (!cursor.isDone) {
+        final command = cursor.nextCommand();
+        if (command == null) {
+          break;
+        }
+        final characteristic = _find(
+          command.serviceUuid,
+          command.characteristicUuid,
+        );
+        if (characteristic == null) {
+          bylwLog(
+            'stage ${command.label} skip missing ${command.characteristicUuid}',
+          );
+          cursor.skipCurrent();
+          continue;
+        }
+        final hex = command.bytes
+            .map((byte) => byte.toRadixString(16).padLeft(2, '0'))
+            .join(' ');
+        bylwLog('tx ${command.label} $hex');
+        _trace('tx', command.characteristicUuid, command.bytes);
+        try {
+          await characteristic.write(
+            command.bytes,
+            withoutResponse: command.bytes.length <= 20,
+            allowLongWrite: command.bytes.length > 20,
+          );
+        } catch (error) {
+          bylwLog('tx ${command.label} retry $error');
+          await characteristic.write(
+            command.bytes,
+            allowLongWrite: command.bytes.length > 20,
+          );
+        }
+        final deadline = DateTime.now().add(cursor.commandTimeout);
+        var timedOut = false;
+        while (cursor.awaitingMore && !timedOut) {
+          final remaining = deadline.difference(DateTime.now());
+          if (remaining.isNegative) {
+            bylwLog('stage ${command.label} skip timeout');
+            cursor.skipCurrent();
+            timedOut = true;
+            break;
+          }
+          try {
+            final packet = await _nextPacket(remaining);
+            final measurements = cursor.consume(packet);
+            saved += measurements.length;
+            for (final measurement in measurements) {
+              if (measurement.type == 'temperature') {
+                final celsius = measurement.values['celsius'];
+                if (celsius is num) {
+                  bylwLog(
+                    'rx temperature-history ${celsius.toStringAsFixed(1)}',
+                  );
+                  _publishRing(
+                    _ringSnapshot.copyWith(
+                      temperatureC: celsius.toDouble(),
+                      temperatureChecked: true,
+                    ),
+                  );
+                }
+              }
+              await _deliver(measurement);
+            }
+          } on TimeoutException {
+            bylwLog('stage ${command.label} skip timeout');
+            cursor.skipCurrent();
+            timedOut = true;
+          }
+        }
+      }
+    } finally {
+      _syncing = false;
+    }
+    return saved;
+  }
+
+  BluetoothCharacteristic? _find(
+    String serviceUuid,
+    String characteristicUuid,
+  ) {
+    final serviceId = normalizeUuid(serviceUuid);
+    final characteristicId = normalizeUuid(characteristicUuid);
+    for (final service in _services) {
+      if (service.uuid.str128 != serviceId) {
+        continue;
+      }
+      for (final characteristic in service.characteristics) {
+        if (characteristic.uuid.str128 == characteristicId) {
+          return characteristic;
+        }
+      }
+    }
+    return null;
+  }
+
+  void _enqueue(List<int> packet) {
+    final waiter = _waiter;
+    if (waiter != null && !waiter.isCompleted) {
+      _waiter = null;
+      waiter.complete(packet);
+      return;
+    }
+    _inbox.add(packet);
+  }
+
+  Future<List<int>> _nextPacket(Duration timeout) async {
+    if (_inbox.isNotEmpty) {
+      return _inbox.removeAt(0);
+    }
+    final completer = Completer<List<int>>();
+    _waiter = completer;
+    try {
+      return await completer.future.timeout(timeout);
+    } finally {
+      if (identical(_waiter, completer)) {
+        _waiter = null;
+      }
+    }
+  }
+}
