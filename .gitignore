@@ -1,0 +1,30 @@
+# OS and editors
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.iml
+*.swp
+
+# Secrets
+.env
+.env.*
+
+# Go
+server/bin/
+*.exe
+*.test
+vendor/
+
+# SQLite
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+server/data/
+
+# Flutter artifacts that sit above app/.gitignore
+app/.dart_tool/
+app/build/
+app/.flutter-plugins
+app/.flutter-plugins-dependencies

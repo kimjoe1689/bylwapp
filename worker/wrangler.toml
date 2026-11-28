@@ -1,0 +1,25 @@
+# Cloudflare Workers + D1 deployment of the bylwapp API.
+# database_id is a placeholder. Replace it with the id from `wrangler d1 create bylwapp`
+# before deploying. Do not put BOOTSTRAP_ADMIN_USER / BOOTSTRAP_ADMIN_PASSWORD here;
+# those are Worker secrets.
+
+name = "bylwapp-api"
+main = "src/index.ts"
+compatibility_date = "2026-11-27"
+compatibility_flags = ["nodejs_compat"]
+
+[observability]
+enabled = true
+
+[observability.traces]
+enabled = true
+
+[vars]
+# Same default as the Go server's stale-device window. Override without a code change.
+STALE_AFTER = "15m"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "bylwapp"
+database_id = "00000000-0000-0000-0000-000000000000"
+migrations_dir = "migrations"
