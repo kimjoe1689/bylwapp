@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:bylwapp/ble/ring/ring_actions.dart';
+import 'package:bylwapp/ble/ring/ring_trace.dart';
 import 'package:bylwapp/models/health_record.dart';
 
 class BleTrace {
@@ -80,6 +81,16 @@ abstract class BleClient {
 
   /// How many days before today the next history sync should request.
   void setRingHistoryDepth(int days);
+
+  void setExploreEvents(bool enabled);
+
+  void setHeartSchedule(String mode);
+
+  void setRingPageOpen(bool open);
+
+  void setGestureMark(bool enabled);
+
+  set onRingPacket(void Function(RingPacketLog log)? listener);
 }
 
 class FakeBleClient implements BleClient {
@@ -147,4 +158,19 @@ class FakeBleClient implements BleClient {
 
   @override
   void setRingHistoryDepth(int days) {}
+
+  @override
+  void setExploreEvents(bool enabled) {}
+
+  @override
+  void setHeartSchedule(String mode) {}
+
+  @override
+  void setRingPageOpen(bool open) {}
+
+  @override
+  void setGestureMark(bool enabled) {}
+
+  @override
+  set onRingPacket(void Function(RingPacketLog log)? listener) {}
 }

@@ -2,6 +2,7 @@ import 'package:material_ui/material_ui.dart';
 
 import 'package:bylwapp/api/server_client.dart';
 import 'package:bylwapp/ble/ble_client.dart';
+import 'package:bylwapp/ble/ring/ring_trace.dart';
 import 'package:bylwapp/ble/device_manager.dart';
 import 'package:bylwapp/data/health_repository.dart';
 import 'package:bylwapp/screens/study_screens.dart';
@@ -20,6 +21,7 @@ class BylwApp extends StatelessWidget {
     this.prefs,
     this.devices,
     this.autoRegister = false,
+    this.traces,
   });
 
   final HealthRepository repository;
@@ -32,6 +34,7 @@ class BylwApp extends StatelessWidget {
 
   /// Production turns this on. Tests leave it off so they do not call the network.
   final bool autoRegister;
+  final RingTraceStore? traces;
 
   @override
   Widget build(BuildContext context) {
@@ -49,6 +52,7 @@ class BylwApp extends StatelessWidget {
         prefs: prefs,
         devices: devices,
         autoRegister: autoRegister,
+        traces: traces,
       ),
     );
   }

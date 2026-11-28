@@ -8,6 +8,7 @@ import 'package:bylwapp/api/server_client.dart';
 import 'package:bylwapp/ble/ble_client.dart';
 import 'package:bylwapp/ble/ring/ring_actions.dart';
 import 'package:bylwapp/ble/ring/ring_sync.dart';
+import 'package:bylwapp/ble/ring/ring_trace.dart';
 import 'package:bylwapp/ble/bylw_log.dart';
 import 'package:bylwapp/ble/device_manager.dart';
 import 'package:bylwapp/ble/driver_registry.dart';
@@ -36,6 +37,7 @@ class AppShell extends StatefulWidget {
     this.prefs,
     this.devices,
     this.autoRegister = false,
+    this.traces,
   });
 
   final HealthRepository repository;
@@ -46,6 +48,7 @@ class AppShell extends StatefulWidget {
   final CollectorPrefs? prefs;
   final BleDeviceManager? devices;
   final bool autoRegister;
+  final RingTraceStore? traces;
 
   @override
   State<AppShell> createState() => _AppShellState();
@@ -74,14 +77,45 @@ class _AppShellState extends State<AppShell> {
       }
     });
     _reload();
+    widget.ble.onRingPacket = _keepTrace;
     if (widget.autoRegister) {
       _armRingHistory();
       _bootSync();
-      _reconnectLastRing();
+      _applyRingPrefs().whenComplete(_reconnectLastRing);
       _syncTimer = Timer.periodic(const Duration(seconds: 45), (_) {
         _bootSync();
       });
     }
+  }
+
+  Future<void> _applyRingPrefs() async {
+    widget.ble.setExploreEvents(await widget.settings.getExploreEvents());
+    widget.ble.setHeartSchedule(await widget.settings.getHeartSchedule());
+    widget.ble.setGestureMark(await widget.settings.getGestureMark());
+  }
+
+  Future<void> _keepTrace(RingPacketLog log) async {
+    if (!await widget.settings.getExploreEvents()) return;
+    await widget.traces?.insert(log);
+    if (log.direction != 'rx') return;
+    if (log.solicited && !log.unknown) return;
+    final hit = _devices.device;
+    if (hit == null || hit.driverId != 'yawell_ring') return;
+    await _onReading(
+      HealthMeasurement(
+        type: 'raw_event',
+        unit: 'hex',
+        recordedAt: log.at,
+        values: {
+          'cmd': log.cmd ?? -1,
+          'sub': log.sub ?? -1,
+          'hex': log.hex,
+          'solicited': log.solicited,
+          'label': log.label,
+        },
+      ),
+      hit,
+    );
   }
 
   Future<void> _armRingHistory() async {
@@ -294,6 +328,8 @@ class _AppShellState extends State<AppShell> {
             ble: widget.ble,
             devices: _devices,
             journal: widget.study?.journal,
+            settings: widget.settings,
+            traces: widget.traces,
           ),
         ),
       );
@@ -316,11 +352,18 @@ class _AppShellState extends State<AppShell> {
 
   Future<void> _onReading(HealthMeasurement measurement, BleScanHit hit) async {
     final kind = driverById(hit.driverId)?.kind ?? measurement.type;
-    _devices.addReading(kind, hit.address, measurement);
+    final quiet =
+        measurement.type == 'raw_event' || measurement.type == 'gesture';
+    if (!quiet) {
+      _devices.addReading(kind, hit.address, measurement);
+    }
     if (widget.prefs?.showDemo == true) {
       return;
     }
-    final historical = measurement.values['stream'] == 'history';
+    final historical =
+        measurement.values['stream'] == 'history' ||
+        measurement.type == 'raw_event' ||
+        measurement.type == 'gesture';
     final stamp = measurement.recordedAt.toUtc().microsecondsSinceEpoch;
     if (!_devices.gate.accept(
       history: historical,
@@ -342,7 +385,9 @@ class _AppShellState extends State<AppShell> {
         model: driver?.targetModel ?? hit.name,
       ),
     );
-    await widget.repository.insertMeasurement(hit.address, measurement);
+    if (!quiet) {
+      await widget.repository.insertMeasurement(hit.address, measurement);
+    }
     await _journalMeasurement(measurement, hit);
     await _reload();
     _scheduleUpload();

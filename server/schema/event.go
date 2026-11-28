@@ -60,6 +60,8 @@ const (
 	TypeDataGap        = "data_gap"
 	TypeUsabilityTask  = "usability_task"
 	TypeSUS            = "sus"
+	TypeRawEvent       = "raw_event"
+	TypeGesture        = "gesture"
 
 	ClockUnset     = "UNSET"
 	ClockNTPSynced = "NTP_SYNCED"
@@ -178,7 +180,7 @@ func (e Event) Validate() error {
 	if !oneOf(e.SensorKind, KindBloodPressure, KindHeartRate, KindRing, KindCollector) {
 		return errors.New("sensor_kind is invalid")
 	}
-	if !oneOf(e.MeasurementType, TypeBloodPressure, TypeHeartRate, TypeSteps, TypeSpO2, TypeSleep, TypeSleepSession, TypeStress, TypeHRV, TypeTemperature, TypeOperatingState, TypeReminder, TypeCareAttention, TypeWornState, TypeDataGap, TypeUsabilityTask, TypeSUS) {
+	if !oneOf(e.MeasurementType, TypeBloodPressure, TypeHeartRate, TypeSteps, TypeSpO2, TypeSleep, TypeSleepSession, TypeStress, TypeHRV, TypeTemperature, TypeOperatingState, TypeReminder, TypeCareAttention, TypeWornState, TypeDataGap, TypeUsabilityTask, TypeSUS, TypeRawEvent, TypeGesture) {
 		return errors.New("measurement_type is invalid")
 	}
 	timed := e.ClockState == ClockNTPSynced || e.ClockState == ClockHoldover

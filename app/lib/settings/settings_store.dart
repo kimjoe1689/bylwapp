@@ -27,6 +27,20 @@ abstract class SettingsStore {
   Future<bool> getRingClockCorrected();
 
   Future<void> setRingClockCorrected();
+
+  /// Record every ring packet. Defaults to on so a new install explores.
+  Future<bool> getExploreEvents();
+
+  Future<void> setExploreEvents(bool enabled);
+
+  /// `continuous` or `interval` (30 seconds every 5 minutes).
+  Future<String> getHeartSchedule();
+
+  Future<void> setHeartSchedule(String mode);
+
+  Future<bool> getGestureMark();
+
+  Future<void> setGestureMark(bool enabled);
 }
 
 class MemorySettingsStore implements SettingsStore {
@@ -43,6 +57,9 @@ class MemorySettingsStore implements SettingsStore {
   String lastRingAddress = '';
   DateTime? lastRingHistoryAt;
   bool ringClockCorrected = false;
+  bool exploreEvents = true;
+  String heartSchedule = 'interval';
+  bool gestureMark = false;
 
   @override
   Future<String> getServerBaseUrl() async => url;
@@ -97,6 +114,30 @@ class MemorySettingsStore implements SettingsStore {
   Future<void> setRingClockCorrected() async {
     ringClockCorrected = true;
   }
+
+  @override
+  Future<bool> getExploreEvents() async => exploreEvents;
+
+  @override
+  Future<void> setExploreEvents(bool enabled) async {
+    exploreEvents = enabled;
+  }
+
+  @override
+  Future<String> getHeartSchedule() async => heartSchedule;
+
+  @override
+  Future<void> setHeartSchedule(String mode) async {
+    heartSchedule = mode;
+  }
+
+  @override
+  Future<bool> getGestureMark() async => gestureMark;
+
+  @override
+  Future<void> setGestureMark(bool enabled) async {
+    gestureMark = enabled;
+  }
 }
 
 class SharedPreferencesSettingsStore implements SettingsStore {
@@ -109,6 +150,9 @@ class SharedPreferencesSettingsStore implements SettingsStore {
   static const ringAddressKey = 'last_ring_address';
   static const ringHistoryKey = 'last_ring_history_at';
   static const ringClockKey = 'ring_clock_corrected';
+  static const exploreKey = 'explore_events';
+  static const heartScheduleKey = 'heart_schedule';
+  static const gestureMarkKey = 'gesture_mark';
   final SharedPreferences _prefs;
 
   static Future<SharedPreferencesSettingsStore> open() async {
@@ -178,6 +222,32 @@ class SharedPreferencesSettingsStore implements SettingsStore {
   @override
   Future<void> setRingClockCorrected() async {
     await _prefs.setBool(ringClockKey, true);
+  }
+
+  @override
+  Future<bool> getExploreEvents() async => _prefs.getBool(exploreKey) ?? true;
+
+  @override
+  Future<void> setExploreEvents(bool enabled) async {
+    await _prefs.setBool(exploreKey, enabled);
+  }
+
+  @override
+  Future<String> getHeartSchedule() async =>
+      _prefs.getString(heartScheduleKey) ?? 'interval';
+
+  @override
+  Future<void> setHeartSchedule(String mode) async {
+    await _prefs.setString(heartScheduleKey, mode);
+  }
+
+  @override
+  Future<bool> getGestureMark() async =>
+      _prefs.getBool(gestureMarkKey) ?? false;
+
+  @override
+  Future<void> setGestureMark(bool enabled) async {
+    await _prefs.setBool(gestureMarkKey, enabled);
   }
 }
 

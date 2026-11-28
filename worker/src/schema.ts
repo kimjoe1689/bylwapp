@@ -38,6 +38,8 @@ const TYPES = [
   "data_gap",
   "usability_task",
   "sus",
+  "raw_event",
+  "gesture",
 ];
 const CLOCKS = ["UNSET", "NTP_SYNCED", "HOLDOVER", "INVALID"];
 const OPS = ["NOMINAL", "BLE_DISCONNECTED", "NETWORK_DEGRADED", "AUTH_FAILURE", "CLOCK_DEGRADED"];

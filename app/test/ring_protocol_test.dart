@@ -4,6 +4,7 @@ import 'package:bylwapp/ble/persist_gate.dart';
 import 'package:bylwapp/ble/ring/ring_packet.dart';
 import 'package:bylwapp/ble/ring/ring_parser.dart';
 import 'package:bylwapp/ble/ring/ring_sync.dart';
+import 'package:bylwapp/ble/ring/ring_trace.dart';
 import 'package:bylwapp/ui/ring_control_page.dart';
 
 void main() {
@@ -462,6 +463,29 @@ void main() {
     expect(RingPacket.gesture(0x06).sublist(0, 2), [0x02, 0x06]);
     expect(ringNoticeLabel(const [0x02, 0x00]), '手势已确认');
     expect(ringNoticeLabel(const [0x02, 0x02]), '检测到挥手');
+  });
+
+  test('a reply within two seconds is solicited', () {
+    final window = RingTxWindow();
+    final at = DateTime.utc(2026, 11, 28, 8);
+    window.sent(0x15, at);
+    expect(
+      window.replySolicited(0x15, at.add(const Duration(seconds: 1))),
+      isTrue,
+    );
+    expect(
+      window.replySolicited(0x15, at.add(const Duration(seconds: 3))),
+      isFalse,
+    );
+    expect(
+      window.replySolicited(0x73, at.add(const Duration(seconds: 1))),
+      isFalse,
+    );
+    expect(ringLabelUnknown(describeAnyRingPacket(const [0x73, 0x99])), isTrue);
+    expect(
+      ringTracesToCsv(const []),
+      'at,direction,characteristic,cmd,sub,solicited,label,hex',
+    );
   });
 
   test('R09 and R05 are the temperature models', () {

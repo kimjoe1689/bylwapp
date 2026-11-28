@@ -77,6 +77,16 @@ class SyncWorker {
         if (result == 'duplicate') duplicateCount++;
         if (await _apply(record, result, attempts)) synced++;
       } on IngestException catch (error) {
+        if (error.statusCode == 400 &&
+            error.message.contains('measurement_type')) {
+          await journal.mark(
+            record.event.eventId,
+            state: 'pending',
+            error: '$error',
+            attempts: record.attempts,
+          );
+          continue;
+        }
         final named = error.deviceId;
         if (error.statusCode == 403 &&
             named != null &&

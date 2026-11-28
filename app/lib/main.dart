@@ -7,6 +7,7 @@ import 'package:bylwapp/app.dart';
 import 'package:bylwapp/ble/bylw_log.dart';
 import 'package:bylwapp/ble/flutter_blue_session.dart';
 import 'package:bylwapp/ble/ring/ring_parser.dart';
+import 'package:bylwapp/ble/ring/ring_trace.dart';
 import 'package:bylwapp/data/sqlite_health_repository.dart';
 import 'package:bylwapp/journal/journal_store.dart';
 import 'package:bylwapp/reminders/reminder_engine.dart';
@@ -22,6 +23,7 @@ Future<void> main() async {
   final repository = await SqliteHealthRepository.open();
   final settings = await SharedPreferencesSettingsStore.open();
   final journal = await JournalStore.open();
+  final traces = await RingTraceStore.open();
   if (!await settings.getRingClockCorrected()) {
     final measurements = await repository.correctRingHistoryClock();
     final events = await _correctJournalRingClock(journal);
@@ -46,6 +48,7 @@ Future<void> main() async {
       study: study,
       prefs: prefs,
       autoRegister: true,
+      traces: traces,
     ),
   );
 }

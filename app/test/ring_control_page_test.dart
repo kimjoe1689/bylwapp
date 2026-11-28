@@ -20,6 +20,9 @@ void main() {
     expect(scroll.position.pixels, 0);
     expect(find.textContaining('14:20'), findsOneWidget);
     expect(find.text('72'), findsWidgets);
+    expect(find.text('事件探索'), findsOneWidget);
+    expect(find.text('每5分钟测30秒'), findsOneWidget);
+    await tester.scrollUntilVisible(find.text('找戒指'), 400);
     expect(find.text('找戒指'), findsOneWidget);
     await tester.scrollUntilVisible(find.text('恢复出厂'), 300);
     expect(find.text('恢复出厂'), findsOneWidget);

@@ -220,6 +220,40 @@ String? ringNoticeLabel(List<int> packet) {
   return 'unknown 0x${command.toRadixString(16).padLeft(2, '0')}';
 }
 
+/// A label for every packet. Unknown commands stay marked unknown.
+String describeAnyRingPacket(List<int> packet) {
+  final known = ringNoticeLabel(packet);
+  if (known != null) return known;
+  if (packet.isEmpty) return 'unknown';
+  final command = packet[0] & 0xff;
+  final routine = switch (command) {
+    RingPacket.cmdSetDateTime => '对时',
+    RingPacket.cmdSyncHeartRate => '心率历史',
+    RingPacket.cmdAutoHeartRate => '自动心率',
+    RingPacket.cmdAutoSpo2 => '自动血氧',
+    RingPacket.cmdAutoStress => '自动压力',
+    RingPacket.cmdSyncStress => '压力历史',
+    RingPacket.cmdSyncHrv => 'HRV历史',
+    RingPacket.cmdAutoTempPref => '体温开关',
+    RingPacket.cmdSyncActivity => '步数历史',
+    RingPacket.cmdTodaySummary => '今日汇总',
+    RingPacket.cmdStopHeartRate => '停止心率',
+    RingPacket.cmdRealtimeHeartRate => '心率保活',
+    RingPacket.cmdBigDataV2 => '历史数据',
+    RingPacket.cmdManualHeartRate => '实时测量',
+    _ => null,
+  };
+  if (routine != null) return routine;
+  final hex = command.toRadixString(16).padLeft(2, '0');
+  if (packet.length < 2) return 'unknown 0x$hex';
+  final sub = (packet[1] & 0xff).toRadixString(16).padLeft(2, '0');
+  return 'unknown 0x$hex/0x$sub';
+}
+
+bool ringLabelUnknown(String label) {
+  return label.startsWith('unknown') || label.startsWith('未知');
+}
+
 bool _routineHistoryCommand(int command) {
   return switch (command) {
     RingPacket.cmdSetDateTime ||

@@ -7,6 +7,9 @@ import 'package:bylwapp/ble/ble_client.dart';
 import 'package:bylwapp/ble/device_manager.dart';
 import 'package:bylwapp/ble/ring/ring_actions.dart';
 import 'package:bylwapp/ble/ring/ring_parser.dart';
+import 'package:bylwapp/ble/ring/ring_trace.dart';
+import 'package:bylwapp/settings/settings_store.dart';
+import 'package:bylwapp/ui/ring_explore_page.dart';
 import 'package:bylwapp/journal/journal_store.dart';
 import 'package:bylwapp/ui/app_theme.dart';
 import 'package:bylwapp/ui/mini_chart.dart';
@@ -86,12 +89,16 @@ class RingControlPage extends StatefulWidget {
     this.devices,
     this.preview,
     this.journal,
+    this.settings,
+    this.traces,
   });
 
   final BleClient? ble;
   final BleDeviceManager? devices;
   final RingPreviewData? preview;
   final JournalStore? journal;
+  final SettingsStore? settings;
+  final RingTraceStore? traces;
 
   @override
   State<RingControlPage> createState() => _RingControlPageState();
@@ -143,6 +150,8 @@ class _RingControlPageState extends State<RingControlPage> {
       _historyAt = snap.historySyncedAt;
     }
     widget.devices?.addListener(_rebuild);
+    widget.ble?.setRingPageOpen(true);
+    _loadRingPrefs();
     _noticeSub = widget.ble?.ringNotices.listen((notice) {
       if (!mounted || notice.label.isEmpty) return;
       setState(() => _pushNotice(notice));
@@ -165,6 +174,7 @@ class _RingControlPageState extends State<RingControlPage> {
 
   @override
   void dispose() {
+    widget.ble?.setRingPageOpen(false);
     _noticeSub?.cancel();
     _snapshotSub?.cancel();
     _gestureTick?.cancel();
@@ -246,11 +256,38 @@ class _RingControlPageState extends State<RingControlPage> {
   double? _journalTemp;
   double? _temperatureC;
   bool _temperatureChecked = false;
+  bool _explore = true;
+  bool _intervalHr = true;
+  bool _gestureMark = false;
   RingDeviceInfo? _info;
   int? _gestureLeft;
   final List<String> _gestureLog = [];
   Timer? _gestureTick;
   StreamSubscription<String>? _gestureSub;
+
+  Future<void> _setHeartSchedule(bool interval) async {
+    setState(() => _intervalHr = interval);
+    final mode = interval ? 'interval' : 'continuous';
+    widget.ble?.setHeartSchedule(mode);
+    await widget.settings?.setHeartSchedule(mode);
+  }
+
+  Future<void> _loadRingPrefs() async {
+    final settings = widget.settings;
+    if (settings == null) return;
+    final explore = await settings.getExploreEvents();
+    final schedule = await settings.getHeartSchedule();
+    final mark = await settings.getGestureMark();
+    widget.ble?.setExploreEvents(explore);
+    widget.ble?.setHeartSchedule(schedule);
+    widget.ble?.setGestureMark(mark);
+    if (!mounted) return;
+    setState(() {
+      _explore = explore;
+      _intervalHr = schedule != 'continuous';
+      _gestureMark = mark;
+    });
+  }
 
   void _pushNotice(RingNotice notice) {
     if (_notices.isNotEmpty &&
@@ -410,6 +447,84 @@ class _RingControlPageState extends State<RingControlPage> {
             onSave: () => _writeAuto('stress', _stressAuto, _stressEvery),
           ),
           const SizedBox(height: 8),
+          Text('采集', style: Theme.of(context).textTheme.titleMedium),
+          const SizedBox(height: 8),
+          Card(
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(16, 8, 16, 12),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  SwitchListTile(
+                    contentPadding: EdgeInsets.zero,
+                    title: const Text('事件探索'),
+                    subtitle: const Text('记下每一个收发包。主动上报和未知包会上传。'),
+                    value: _explore,
+                    onChanged: (value) async {
+                      setState(() => _explore = value);
+                      widget.ble?.setExploreEvents(value);
+                      await widget.settings?.setExploreEvents(value);
+                    },
+                  ),
+                  Align(
+                    alignment: Alignment.centerLeft,
+                    child: TextButton(
+                      onPressed: widget.traces == null
+                          ? null
+                          : () {
+                              Navigator.of(context).push(
+                                MaterialPageRoute<void>(
+                                  builder: (context) =>
+                                      RingExplorePage(traces: widget.traces!),
+                                ),
+                              );
+                            },
+                      child: const Text('查看并导出'),
+                    ),
+                  ),
+                  const Text('实时心率'),
+                  const SizedBox(height: 8),
+                  Wrap(
+                    spacing: 8,
+                    children: [
+                      ChoiceChip(
+                        showCheckmark: false,
+                        label: const Text('连续'),
+                        selected: !_intervalHr,
+                        onSelected: (_) => _setHeartSchedule(false),
+                      ),
+                      ChoiceChip(
+                        showCheckmark: false,
+                        label: const Text('每5分钟测30秒'),
+                        selected: _intervalHr,
+                        onSelected: (_) => _setHeartSchedule(true),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 4),
+                  Text(
+                    '打开本页时会一直测。固件大约 30 秒会停，应用会重新开始。',
+                    style: TextStyle(
+                      fontSize: 12,
+                      color: scheme.onSurfaceVariant,
+                    ),
+                  ),
+                  SwitchListTile(
+                    contentPadding: EdgeInsets.zero,
+                    title: const Text('挥手打标记'),
+                    subtitle: const Text('保持手势模式，每次挥手记一条，不做其他动作。'),
+                    value: _gestureMark,
+                    onChanged: (value) async {
+                      setState(() => _gestureMark = value);
+                      widget.ble?.setGestureMark(value);
+                      await widget.settings?.setGestureMark(value);
+                    },
+                  ),
+                ],
+              ),
+            ),
+          ),
+          const SizedBox(height: 16),
           Text('工具', style: Theme.of(context).textTheme.titleMedium),
           const SizedBox(height: 8),
           Wrap(
@@ -575,7 +690,12 @@ class _RingControlPageState extends State<RingControlPage> {
   Future<void> _finishGesture() async {
     _gestureTick?.cancel();
     _gestureTick = null;
-    await widget.ble?.performRingAction(RingAction.gestureOff);
+    final keep = widget.settings == null
+        ? _gestureMark
+        : await widget.settings!.getGestureMark();
+    if (!keep) {
+      await widget.ble?.performRingAction(RingAction.gestureOff);
+    }
     await _gestureSub?.cancel();
     _gestureSub = null;
     if (!mounted) return;

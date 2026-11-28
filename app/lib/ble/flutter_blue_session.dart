@@ -15,6 +15,7 @@ import 'package:bylwapp/ble/ring/ring_driver.dart';
 import 'package:bylwapp/ble/ring/ring_parser.dart';
 import 'package:bylwapp/ble/ring/ring_packet.dart';
 import 'package:bylwapp/ble/ring/ring_sync.dart';
+import 'package:bylwapp/ble/ring/ring_trace.dart';
 import 'package:bylwapp/ble/uuids.dart';
 import 'package:bylwapp/models/health_record.dart';
 
@@ -55,7 +56,6 @@ class FlutterBlueSession implements BleClient {
   Timer? _ringResync;
   Timer? _ringKeepalive;
   bool _ringBusy = false;
-  bool _measuringHr = false;
   int _ringHistoryDays = 1;
   final StreamController<RingNotice> _ringNotices =
       StreamController<RingNotice>.broadcast();
@@ -65,6 +65,19 @@ class FlutterBlueSession implements BleClient {
       StreamController<String>.broadcast();
   final Map<RingSyncPhase, Timer> _incremental = {};
   bool _gestureWatch = false;
+  bool _exploreEvents = true;
+  bool _hrContinuous = false;
+  bool _pageOpen = false;
+  bool _liveRequested = false;
+  bool _gestureMark = false;
+  bool _hrRunning = false;
+  DateTime? _hrStartedAt;
+  DateTime? _lastHrSample;
+  DateTime? _burstUntil;
+  DateTime? _nextBurst;
+  Timer? _hrWatch;
+  final RingTxWindow _txWindow = RingTxWindow();
+  void Function(RingPacketLog log)? _onRingPacket;
   RingSnapshot _ringSnapshot = const RingSnapshot();
 
   @override
@@ -82,6 +95,50 @@ class FlutterBlueSession implements BleClient {
   @override
   void setRingHistoryDepth(int days) {
     _ringHistoryDays = days < 0 ? 0 : (days > 7 ? 7 : days);
+  }
+
+  @override
+  void setExploreEvents(bool enabled) {
+    _exploreEvents = enabled;
+  }
+
+  @override
+  void setHeartSchedule(String mode) {
+    _hrContinuous = mode == 'continuous';
+  }
+
+  @override
+  void setRingPageOpen(bool open) {
+    _pageOpen = open;
+    if (open) {
+      _startHr();
+    } else if (!_hrContinuous && !_liveRequested) {
+      _stopHr();
+      _burstUntil = null;
+      _nextBurst = DateTime.now().add(const Duration(minutes: 5));
+    }
+  }
+
+  @override
+  void setGestureMark(bool enabled) {
+    final was = _gestureMark;
+    _gestureMark = enabled;
+    if (!_wantConnected || _driver is! YawellRingDriver) return;
+    if (enabled && !was) {
+      unawaited(_armGesture());
+    } else if (!enabled && was) {
+      unawaited(_writeRing(RingPacket.gesture(0x06), 'gesture-off'));
+    }
+  }
+
+  @override
+  set onRingPacket(void Function(RingPacketLog log)? listener) {
+    _onRingPacket = listener;
+  }
+
+  Future<void> _armGesture() async {
+    await _writeRing(RingPacket.gesture(0x04), 'gesture-on');
+    await _writeRing(RingPacket.gesture(0x05), 'gesture-wait');
   }
 
   void _publishRing(RingSnapshot next, {RingNotice? notice}) {
@@ -245,8 +302,11 @@ class FlutterBlueSession implements BleClient {
     _incremental.clear();
     _ringResync?.cancel();
     _ringKeepalive?.cancel();
+    _hrWatch?.cancel();
     _ringResync = null;
     _ringKeepalive = null;
+    _hrWatch = null;
+    _hrRunning = false;
     await _cancelChrSubs();
     await _connSub?.cancel();
     _connSub = null;
@@ -347,6 +407,7 @@ class FlutterBlueSession implements BleClient {
     _ringBusy = true;
     _ringResync?.cancel();
     _ringKeepalive?.cancel();
+    _hrWatch?.cancel();
     try {
       await _readDeviceInfo();
       await _ringStage('set-time', () async {
@@ -422,11 +483,9 @@ class FlutterBlueSession implements BleClient {
           _publishRing(_ringSnapshot.copyWith(temperatureChecked: true));
         }
       });
-      await _ringStage('realtime-hr', () async {
-        await _writeRing(RingPacket.startRealtimeHeartRate(), 'realtime-hr');
-        _measuringHr = true;
-        _publishRing(_ringSnapshot.copyWith(measuring: true));
-      });
+      if (_gestureMark) {
+        await _ringStage('gesture-mark', _armGesture);
+      }
       await _ringStage('history', () async {
         final saved = await _syncRing(
           true,
@@ -446,8 +505,10 @@ class FlutterBlueSession implements BleClient {
     if (!_wantConnected || _driver is! YawellRingDriver) {
       return;
     }
+    _nextBurst ??= DateTime.now();
+    _hrWatch = Timer.periodic(const Duration(seconds: 1), (_) => _tickHeart());
     _ringKeepalive = Timer.periodic(const Duration(seconds: 15), (_) {
-      if (!_wantConnected || _syncing || _ringBusy || !_measuringHr) {
+      if (!_wantConnected || _syncing || _ringBusy || !_hrRunning) {
         return;
       }
       unawaited(
@@ -552,14 +613,12 @@ class FlutterBlueSession implements BleClient {
             message: '已关闭手势（02 06）',
           );
         case 'live-start':
-          await _writeRing(RingPacket.startRealtimeHeartRate(), 'realtime-hr');
-          _measuringHr = true;
-          _publishRing(_ringSnapshot.copyWith(measuring: true));
+          _liveRequested = true;
+          _startHr();
           return RingActionResult.ok;
         case 'live-stop':
-          await _writeRing(RingPacket.stopRealtimeHeartRate(), 'stop-hr');
-          _measuringHr = false;
-          _publishRing(_ringSnapshot.copyWith(measuring: false));
+          _liveRequested = false;
+          if (!_pageOpen && !_hrContinuous) _stopHr();
           return RingActionResult.ok;
         case 'auto-read':
           return await _auto(action, write: false);
@@ -719,6 +778,26 @@ class FlutterBlueSession implements BleClient {
         .join(' ');
     bylwLog('rx $characteristicUuid $hex');
     _trace('rx', characteristicUuid, value);
+    if (value.length >= 2 &&
+        (value[0] & 0xff) == RingPacket.cmdManualHeartRate &&
+        (value[1] & 0xff) == RingPacket.manualHeartRate) {
+      _lastHrSample = DateTime.now();
+    }
+    if (_gestureMark &&
+        value.length >= 2 &&
+        (value[0] & 0xff) == 0x02 &&
+        (value[1] & 0xff) == 0x02) {
+      unawaited(
+        _deliver(
+          HealthMeasurement(
+            type: 'gesture',
+            unit: 'event',
+            recordedAt: DateTime.now().toUtc(),
+            values: {'cmd': 2, 'sub': 2, 'hex': hex},
+          ),
+        ),
+      );
+    }
     if (_gestureWatch && !_gestureRx.isClosed) {
       final label = ringNoticeLabel(value);
       _gestureRx.add(label == null ? hex : '$label  $hex');
@@ -731,16 +810,91 @@ class FlutterBlueSession implements BleClient {
   }
 
   void _trace(String direction, String characteristicUuid, List<int> bytes) {
+    final at = DateTime.now().toUtc();
     if (!_traces.isClosed) {
       _traces.add(
         BleTrace(
-          at: DateTime.now().toUtc(),
+          at: at,
           direction: direction,
           characteristicUuid: characteristicUuid,
           bytes: List<int>.from(bytes),
         ),
       );
     }
+    if (!_exploreEvents || _onRingPacket == null) return;
+    final cmd = bytes.isEmpty ? null : bytes[0] & 0xff;
+    final sub = bytes.length < 2 ? null : bytes[1] & 0xff;
+    if (direction == 'tx' && cmd != null) {
+      _txWindow.sent(cmd, at);
+    }
+    final label = direction == 'rx'
+        ? describeAnyRingPacket(bytes)
+        : (cmd == null ? 'tx' : 'tx ${describeAnyRingPacket(bytes)}');
+    final solicited =
+        direction == 'rx' && cmd != null && _txWindow.replySolicited(cmd, at);
+    _onRingPacket!(
+      RingPacketLog(
+        at: at,
+        direction: direction,
+        characteristic: characteristicUuid,
+        hex: bytes
+            .map((byte) => byte.toRadixString(16).padLeft(2, '0'))
+            .join(' '),
+        label: label,
+        solicited: solicited,
+        cmd: cmd,
+        sub: sub,
+      ),
+    );
+  }
+
+  void _tickHeart() {
+    if (!_wantConnected || _driver is! YawellRingDriver) return;
+    if (_syncing || _ringBusy) return;
+    final now = DateTime.now();
+    if (_hrContinuous || _pageOpen || _liveRequested) {
+      _ensureHr(now);
+      return;
+    }
+    if (_burstUntil != null) {
+      if (now.isBefore(_burstUntil!)) {
+        _ensureHr(now);
+      } else {
+        _stopHr();
+        _burstUntil = null;
+        _nextBurst = now.add(const Duration(minutes: 5));
+      }
+      return;
+    }
+    if (_nextBurst == null || !now.isBefore(_nextBurst!)) {
+      _burstUntil = now.add(const Duration(seconds: 30));
+      _startHr();
+    }
+  }
+
+  void _ensureHr(DateTime now) {
+    final stale =
+        _lastHrSample == null ||
+        now.difference(_lastHrSample!) >= const Duration(seconds: 3);
+    final aged =
+        _hrStartedAt == null ||
+        now.difference(_hrStartedAt!) >= const Duration(seconds: 28);
+    if (!_hrRunning || stale || aged) _startHr();
+  }
+
+  void _startHr() {
+    _hrRunning = true;
+    _hrStartedAt = DateTime.now();
+    _lastHrSample = DateTime.now();
+    unawaited(_writeRing(RingPacket.startRealtimeHeartRate(), 'realtime-hr'));
+    _publishRing(_ringSnapshot.copyWith(measuring: true));
+  }
+
+  void _stopHr() {
+    if (!_hrRunning) return;
+    _hrRunning = false;
+    unawaited(_writeRing(RingPacket.stopRealtimeHeartRate(), 'stop-hr'));
+    _publishRing(_ringSnapshot.copyWith(measuring: false));
   }
 
   Future<void> _onValue(String characteristicUuid, List<int> value) async {
